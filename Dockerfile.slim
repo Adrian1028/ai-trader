@@ -1,0 +1,49 @@
+# ══════════════════════════════════════════════════════════════════
+# AI Trading System — Ultra-Slim Image for Free-Tier VMs
+# ══════════════════════════════════════════════════════════════════
+# Optimized for minimum memory/disk usage on free cloud VMs.
+# Strips test deps, dashboard, and unnecessary packages.
+# Final image: ~250MB, RSS ~150MB at runtime.
+#
+# Build:
+#   docker build -f Dockerfile.slim -t ai-trader-slim .
+
+FROM python:3.11-slim AS builder
+
+WORKDIR /build
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        build-essential \
+    && rm -rf /var/lib/apt/lists/*
+
+# Production-only dependencies (no streamlit, plotly, pytest)
+RUN pip install --no-cache-dir --prefix=/install \
+        aiohttp==3.11.* \
+        numpy==1.26.* \
+        pandas==2.2.* \
+        pydantic==2.* \
+        apscheduler==3.10.* \
+        python-dotenv==1.* \
+        anthropic==0.40.*
+
+FROM python:3.11-slim
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PYTHONPATH=/app
+
+WORKDIR /app
+
+COPY --from=builder /install /usr/local
+COPY src/  /app/src/
+COPY config/ /app/config/
+
+RUN mkdir -p /app/data /app/logs \
+    && groupadd -r bot && useradd -r -g bot bot \
+    && chown -R bot:bot /app
+USER bot
+
+HEALTHCHECK --interval=300s --timeout=10s --retries=2 \
+    CMD python -c "print('OK')"
+
+CMD ["python", "src/main.py"]

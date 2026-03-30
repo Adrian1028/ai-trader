@@ -1,0 +1,27 @@
+# API Keys — NEVER commit
+.env
+
+# Claude Code
+.claude/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+venv/
+
+# Data & logs (runtime generated)
+data/
+logs/
+backups/
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Docker
+.docker/

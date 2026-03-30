@@ -1,0 +1,53 @@
+# ══════════════════════════════════════════════════════════════════
+# AI Trading System — Cloud Run Image
+# ══════════════════════════════════════════════════════════════════
+# Optimized for Google Cloud Run:
+#   - HTTP server on $PORT (required by Cloud Run)
+#   - Stateless: state persisted to Cloud Storage / Firestore
+#   - Fast cold start (~3s)
+#   - Minimal image size
+#
+# Build & Deploy:
+#   gcloud builds submit --tag gcr.io/PROJECT_ID/ai-trader
+#   gcloud run deploy ai-trader --image gcr.io/PROJECT_ID/ai-trader \
+#     --region=us-central1 --memory=512Mi --timeout=300 \
+#     --no-allow-unauthenticated
+
+FROM python:3.11-slim AS builder
+
+WORKDIR /build
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        build-essential \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN pip install --no-cache-dir --prefix=/install \
+        aiohttp>=3.9 \
+        numpy>=1.26 \
+        pandas>=2.1 \
+        pydantic>=2.0 \
+        apscheduler>=3.10 \
+        python-dotenv>=1.0 \
+        anthropic>=0.40
+
+FROM python:3.11-slim
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PYTHONPATH=/app \
+    PORT=8080
+
+WORKDIR /app
+
+COPY --from=builder /install /usr/local
+COPY src/  /app/src/
+COPY config/ /app/config/
+
+# Cloud Run uses /tmp for writable storage (ephemeral)
+RUN mkdir -p /tmp/data /tmp/logs \
+    && ln -s /tmp/data /app/data \
+    && ln -s /tmp/logs /app/logs
+
+# Cloud Run runs as non-root by default
+# Entry point: HTTP handler (listens on $PORT)
+CMD ["python", "src/cloud_run_handler.py"]

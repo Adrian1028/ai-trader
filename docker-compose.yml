@@ -1,0 +1,62 @@
+# ══════════════════════════════════════════════════════════════════
+# AI Trading System — Docker Compose (Free-Tier Optimized)
+# ══════════════════════════════════════════════════════════════════
+# Usage:
+#   docker compose up -d --build    # Build and start
+#   docker compose logs -f          # Follow live logs
+#   docker compose down             # Graceful shutdown
+#
+# For free-tier VMs (Oracle Cloud / AWS / GCP):
+#   - Single service only (no dashboard to save RAM)
+#   - Memory limit 512MB (fits 1GB free-tier VM with OS overhead)
+#   - Auto-restart on crash
+#
+# Prerequisites:
+#   1. Copy .env.example to .env and fill in your API keys
+#   2. Ensure T212_ENV=demo for paper trading
+
+services:
+  ai-trader:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: ai-trader
+    restart: unless-stopped
+
+    env_file:
+      - .env
+
+    environment:
+      - DATA_DIR=/app/data
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - BOT_ID=${BOT_ID:-AlphaBot_01}
+      - INITIAL_CAPITAL=${INITIAL_CAPITAL:-10000.0}
+      - TARGET_ISINS=${TARGET_ISINS:-}
+
+    volumes:
+      - bot-data:/app/data
+      - bot-logs:/app/logs
+
+    # Free-tier optimized: 512MB max (leaves room for OS on 1GB VM)
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: "0.5"
+        reservations:
+          memory: 128M
+          cpus: "0.1"
+
+    stop_grace_period: 30s
+
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "5m"
+        max-file: "3"
+
+volumes:
+  bot-data:
+    driver: local
+  bot-logs:
+    driver: local

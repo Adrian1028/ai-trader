@@ -1,0 +1,30 @@
+[project]
+name = "mas-quant-trader"
+version = "0.1.0"
+description = "Multi-Agent System quantitative trading platform on Trading 212"
+requires-python = ">=3.11"
+dependencies = [
+    "aiohttp>=3.9",
+    "pydantic>=2.0",
+    "numpy>=1.26",
+    "pandas>=2.1",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.23",
+    "aioresponses>=0.7",
+    "ruff>=0.3",
+]
+backtest = [
+    "vectorbt>=0.26",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
