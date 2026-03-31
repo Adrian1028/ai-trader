@@ -377,20 +377,13 @@ class TradingSystem:
 
         async def _fetch_one(ticker: str) -> None:
             try:
-                market = _market_map.get(ticker, MARKET_US)
-
-                # Route to correct data provider based on market
-                if market == MARKET_UK:
-                    bars = await self._yfinance.daily_bars(ticker, days=365)
-                else:
-                    bars = await self._polygon.daily_bars(ticker, days=365)
+                # YFinance is the primary data source for ALL markets.
+                # It's free, unlimited, and supports US + UK + global stocks.
+                # Polygon (5 req/min free tier) is too slow for 20+ stocks.
+                bars = await self._yfinance.daily_bars(ticker, days=365)
 
                 if not bars:
-                    # Fallback: try YFinance for US stocks too if Polygon fails
-                    if market == MARKET_US:
-                        bars = await self._yfinance.daily_bars(ticker, days=365)
-                    if not bars:
-                        return
+                    return
 
                 closes = np.array([b.close for b in bars], dtype=np.float64)
                 highs = np.array([b.high for b in bars], dtype=np.float64)
