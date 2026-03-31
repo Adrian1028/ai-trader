@@ -33,7 +33,7 @@ RUN pip install --no-cache-dir --prefix=/install \
         pydantic>=2.0 \
         apscheduler>=3.10 \
         python-dotenv>=1.0 \
-        anthropic>=0.40
+        google-genai>=1.0
 
 # ── Stage 2: Runtime ─────────────────────────────────────────────
 FROM python:3.11-slim

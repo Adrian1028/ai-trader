@@ -59,7 +59,7 @@ pip install --no-cache-dir -q \
     pydantic>=2.0 \
     apscheduler>=3.10 \
     python-dotenv>=1.0 \
-    anthropic>=0.40
+    google-genai>=1.0
 
 echo "  Dependencies installed."
 

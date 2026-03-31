@@ -1,14 +1,14 @@
 """
-Claude Strategist Agent — LLM 語義推理智能體
-============================================
+Gemini Strategist Agent — LLM semantic reasoning agent
+=======================================================
 The fourth intelligence agent in the MAS pipeline.  Unlike the other
-three rule-based agents, this one calls the Claude API to perform
+three rule-based agents, this one calls the Gemini API to perform
 semantic reasoning over raw market data, news, and fundamentals.
 
 Architecture
 ------------
   Other agents produce signals based on fixed rules (RSI thresholds,
-  P/E ratios, sentiment scores).  ClaudeStrategist receives the same
+  P/E ratios, sentiment scores).  GeminiStrategist receives the same
   raw data and applies *reasoning*:
 
     "Revenue growth is 8% but the P/E is 35 — overvalued relative to
@@ -21,10 +21,9 @@ Architecture
 
 Cost Control
 ------------
-  - Uses claude-haiku-4-5 by default ($1/$5 per 1M tokens)
-  - ~2K input + ~300 output per call ≈ $0.004 per stock per scan
-  - 20 stocks × 28 scans/day ≈ $2.24/day ≈ $67/month
-  - Configurable via CLAUDE_MODEL env var
+  - Uses gemini-2.5-flash by default (FREE tier: 10 RPM)
+  - ~2K input + ~300 output per call = $0 within free tier
+  - 20 stocks x 28 scans/day = 560 calls/day (within free limits)
   - Gracefully degrades to NEUTRAL if API key is missing or call fails
 """
 from __future__ import annotations
@@ -38,8 +37,8 @@ from src.core.base_agent import AnalysisSignal, BaseAgent, SignalDirection
 
 logger = logging.getLogger(__name__)
 
-# System prompt — frozen for prompt caching efficiency
-_SYSTEM_PROMPT = """\
+# System instruction for Gemini
+_SYSTEM_INSTRUCTION = """\
 You are a senior quantitative analyst at a hedge fund.
 You receive market data for a single stock and must decide: BUY, SELL, or NEUTRAL.
 
@@ -54,9 +53,9 @@ Rules:
 """
 
 
-class ClaudeStrategist(BaseAgent):
+class GeminiStrategist(BaseAgent):
     """
-    LLM-powered intelligence agent using Claude API.
+    LLM-powered intelligence agent using Google Gemini API.
 
     Analyses raw market data through semantic reasoning rather than
     fixed rules.  Designed as a drop-in fourth agent for the
@@ -65,9 +64,9 @@ class ClaudeStrategist(BaseAgent):
     Parameters
     ----------
     model : str
-        Claude model ID (default: claude-haiku-4-5 for cost efficiency).
+        Gemini model ID (default: gemini-2.5-flash for free tier).
     api_key : str | None
-        Anthropic API key.  Falls back to ANTHROPIC_API_KEY env var.
+        Google AI API key.  Falls back to GEMINI_API_KEY env var.
     """
 
     def __init__(
@@ -75,37 +74,37 @@ class ClaudeStrategist(BaseAgent):
         model: str | None = None,
         api_key: str | None = None,
     ) -> None:
-        super().__init__("claude_strategist")
-        self._model = model or os.getenv("CLAUDE_MODEL", "claude-haiku-4-5")
-        self._api_key = api_key or os.getenv("ANTHROPIC_API_KEY", "")
+        super().__init__("gemini_strategist")
+        self._model = model or os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
+        self._api_key = api_key or os.getenv("GEMINI_API_KEY", "")
         self._client: Any = None  # lazy init
 
     def _get_client(self) -> Any:
-        """Lazy-initialise the Anthropic client."""
+        """Lazy-initialise the Gemini client."""
         if self._client is None:
             try:
-                import anthropic
-                self._client = anthropic.Anthropic(api_key=self._api_key)
+                from google import genai
+                self._client = genai.Client(api_key=self._api_key)
                 logger.info(
-                    "ClaudeStrategist initialised (model=%s)", self._model,
+                    "GeminiStrategist initialised (model=%s)", self._model,
                 )
             except Exception as exc:
-                logger.warning("Failed to init Anthropic client: %s", exc)
+                logger.warning("Failed to init Gemini client: %s", exc)
                 raise
         return self._client
 
-    # ── core interface ────────────────────────────────────────────
+    # -- core interface ------------------------------------------------
 
     async def analyse(self, context: dict[str, Any]) -> AnalysisSignal:
         """
-        Call Claude to analyse a single stock.
+        Call Gemini to analyse a single stock.
 
         The context dict is the same one passed to all agents by the
         Orchestrator.  We extract whatever data is available and build
-        a concise prompt for Claude.
+        a concise prompt for Gemini.
         """
         if not self._api_key:
-            return self._neutral("No ANTHROPIC_API_KEY configured")
+            return self._neutral("No GEMINI_API_KEY configured")
 
         ticker = context.get("ticker", "UNKNOWN")
 
@@ -115,19 +114,28 @@ class ClaudeStrategist(BaseAgent):
         try:
             client = self._get_client()
 
-            # Synchronous call wrapped for async compatibility
-            # (Haiku responds in <1s typically)
-            response = client.messages.create(
+            # Call Gemini API
+            response = client.models.generate_content(
                 model=self._model,
-                max_tokens=256,
-                system=_SYSTEM_PROMPT,
-                messages=[{"role": "user", "content": prompt}],
+                contents=prompt,
+                config={
+                    "system_instruction": _SYSTEM_INSTRUCTION,
+                    "max_output_tokens": 256,
+                    "temperature": 0.3,
+                    "response_mime_type": "application/json",
+                },
             )
 
             # Parse the JSON response
-            text = next(
-                (b.text for b in response.content if b.type == "text"), "",
-            )
+            text = response.text or ""
+
+            # Extract token usage
+            input_tokens = 0
+            output_tokens = 0
+            if response.usage_metadata:
+                input_tokens = getattr(response.usage_metadata, "prompt_token_count", 0) or 0
+                output_tokens = getattr(response.usage_metadata, "candidates_token_count", 0) or 0
+
             result = json.loads(text)
 
             direction_str = result.get("direction", "NEUTRAL").upper()
@@ -143,7 +151,7 @@ class ClaudeStrategist(BaseAgent):
             reasoning = result.get("reasoning", "No reasoning provided")
 
             logger.info(
-                "[Claude] %s → %s (conf=%.2f) | %s",
+                "[Gemini] %s -> %s (conf=%.2f) | %s",
                 ticker, direction.name, confidence, reasoning,
             )
 
@@ -155,23 +163,23 @@ class ClaudeStrategist(BaseAgent):
                 data={
                     "model": self._model,
                     "raw_response": text,
-                    "input_tokens": response.usage.input_tokens,
-                    "output_tokens": response.usage.output_tokens,
+                    "input_tokens": input_tokens,
+                    "output_tokens": output_tokens,
                 },
             )
 
         except json.JSONDecodeError as exc:
-            logger.warning("[Claude] %s: invalid JSON response: %s", ticker, exc)
-            return self._neutral(f"Invalid JSON from Claude: {exc}")
+            logger.warning("[Gemini] %s: invalid JSON response: %s", ticker, exc)
+            return self._neutral(f"Invalid JSON from Gemini: {exc}")
 
         except Exception as exc:
-            logger.warning("[Claude] %s: API call failed: %s", ticker, exc)
-            return self._neutral(f"Claude API error: {exc}")
+            logger.warning("[Gemini] %s: API call failed: %s", ticker, exc)
+            return self._neutral(f"Gemini API error: {exc}")
 
-    # ── prompt construction ───────────────────────────────────────
+    # -- prompt construction -------------------------------------------
 
     def _build_prompt(self, context: dict[str, Any]) -> str:
-        """Build a concise data summary prompt for Claude."""
+        """Build a concise data summary prompt for Gemini."""
         ticker = context.get("ticker", "?")
         sections = [f"## {ticker} — Market Analysis Request\n"]
 
@@ -228,7 +236,7 @@ class ClaudeStrategist(BaseAgent):
         sections.append("\nGive your analysis as JSON.")
         return "\n".join(sections)
 
-    # ── helpers ───────────────────────────────────────────────────
+    # -- helpers -------------------------------------------------------
 
     def _neutral(self, reason: str) -> AnalysisSignal:
         """Return a NEUTRAL signal with zero confidence."""

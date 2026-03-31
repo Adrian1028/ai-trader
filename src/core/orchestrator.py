@@ -23,7 +23,7 @@ from src.agents.execution.executor import ExecutionAgent
 from src.agents.intelligence.fundamental import FundamentalAgent
 from src.agents.intelligence.orchestrator import IntelligenceOrchestrator, MarketView
 from src.agents.intelligence.sentiment import SentimentAgent
-from src.agents.intelligence.claude_strategist import ClaudeStrategist
+from src.agents.intelligence.gemini_strategist import GeminiStrategist
 from src.agents.intelligence.technical import TechnicalAgent
 from src.core.regime_detector import RegimeDetector, RegimeSnapshot
 from src.compliance.guard import ComplianceGuard
@@ -97,9 +97,9 @@ class TradingSystem:
         self._fundamental = FundamentalAgent(self._av, self._intrinio)
         self._technical = TechnicalAgent(self._av, self._polygon)
         self._sentiment = SentimentAgent(self._finnhub)
-        self._claude = ClaudeStrategist()  # reads ANTHROPIC_API_KEY from env
+        self._gemini = GeminiStrategist()  # reads GEMINI_API_KEY from env
         self._intelligence = IntelligenceOrchestrator(
-            agents=[self._fundamental, self._technical, self._sentiment, self._claude],
+            agents=[self._fundamental, self._technical, self._sentiment, self._gemini],
         )
 
         # Decision & Risk layer

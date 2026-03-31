@@ -88,7 +88,7 @@ _DEFAULT_WEIGHTS = {
     "fundamental": 0.30,   # 長期內在價值
     "technical": 0.30,     # 短期價格趨勢與動能
     "sentiment": 0.20,     # 市場情緒與新聞解讀
-    "claude_strategist": 0.20,  # LLM 語義推理（跨因子綜合判斷）
+    "gemini_strategist": 0.20,  # LLM 語義推理（跨因子綜合判斷）
 }
 
 # ── 分歧懲罰參數 ──────────────────────────────────────────────
@@ -146,8 +146,8 @@ class IntelligenceOrchestrator:
         # ── Step 1: Fan-out — 平行執行規則型代理 ─────────────────
         # Separate rule-based agents from LLM agent so we can feed
         # rule-based signals to the LLM as context.
-        rule_agents = [a for a in self._agents if a.name != "claude_strategist"]
-        llm_agents = [a for a in self._agents if a.name == "claude_strategist"]
+        rule_agents = [a for a in self._agents if a.name != "gemini_strategist"]
+        llm_agents = [a for a in self._agents if a.name == "gemini_strategist"]
 
         tasks = [
             asyncio.create_task(agent.safe_analyse(context))
