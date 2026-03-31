@@ -22,6 +22,7 @@ from __future__ import annotations
 import json
 import os
 import re
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pandas as pd
@@ -179,6 +180,22 @@ audit_records = load_audit_trail()
 learning_report = load_learning_report()
 
 
+# ── Panel 0: Market Status Banner ─────────────────────────────────
+
+now_utc = datetime.now(timezone.utc)
+hour_utc = now_utc.hour
+minute_utc = now_utc.minute
+
+uk_open = 8 <= hour_utc < 16 or (hour_utc == 16 and minute_utc <= 30)
+us_open = 13 <= hour_utc < 20 or (hour_utc == 13 and minute_utc >= 30)
+
+ms1, ms2, ms3 = st.columns(3)
+ms1.metric("🕐 UTC Time", now_utc.strftime("%H:%M:%S"))
+ms2.metric("🇬🇧 London (LSE)", "🟢 OPEN" if uk_open else "🔴 CLOSED")
+ms3.metric("🇺🇸 New York (NYSE)", "🟢 OPEN" if us_open else "🔴 CLOSED")
+
+st.divider()
+
 # ── Panel 1: Virtual Account KPIs ─────────────────────────────────
 
 st.header("Virtual Account Status")
@@ -330,6 +347,29 @@ if episodes:
                 st.info("No parseable attribution reports yet.")
         else:
             st.success("No losing trades recorded!")
+
+    # Cumulative P&L chart
+    if "pnl" in df.columns and "timestamp" in df.columns:
+        st.subheader("📈 Cumulative P&L Over Time")
+        df_pnl = df.copy()
+        df_pnl["time"] = pd.to_datetime(df_pnl["timestamp"], unit="s", errors="coerce")
+        df_pnl = df_pnl.sort_values("time")
+        df_pnl["cumulative_pnl"] = df_pnl["pnl"].cumsum()
+        fig_pnl = go.Figure()
+        fig_pnl.add_trace(go.Scatter(
+            x=df_pnl["time"], y=df_pnl["cumulative_pnl"],
+            mode="lines", name="Cumulative P&L",
+            fill="tozeroy",
+            line=dict(color="#00CC96"),
+            fillcolor="rgba(0,204,150,0.2)",
+        ))
+        fig_pnl.update_layout(
+            yaxis_title="P&L (£)",
+            height=300,
+            margin=dict(t=10, b=10),
+        )
+        fig_pnl.add_hline(y=0, line_dash="dash", line_color="gray")
+        st.plotly_chart(fig_pnl, use_container_width=True)
 
     # Regime distribution
     if "regime_tag" in df.columns:
@@ -562,7 +602,21 @@ if learning_report:
         st.json(learning_report)
 
 # ── Footer ─────────────────────────────────────────────────────────
-st.caption("Auto-refreshes every 10 seconds via Streamlit cache. Click below to force refresh.")
-if st.button("Refresh Now"):
-    st.cache_data.clear()
-    st.rerun()
+st.divider()
+foot1, foot2 = st.columns([3, 1])
+with foot1:
+    st.caption(
+        f"🤖 AI Quantitative Trading War Room | "
+        f"Last updated: {now_utc.strftime('%Y-%m-%d %H:%M:%S UTC')} | "
+        f"Auto-refreshes every 30 seconds"
+    )
+with foot2:
+    if st.button("🔄 Refresh Now"):
+        st.cache_data.clear()
+        st.rerun()
+
+# Auto-refresh every 30 seconds
+st.markdown(
+    '<meta http-equiv="refresh" content="30">',
+    unsafe_allow_html=True,
+)
