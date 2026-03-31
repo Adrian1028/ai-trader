@@ -40,7 +40,7 @@ logger = logging.getLogger("Main")
 
 # ── Target symbols (ISIN-based for T212 compatibility) ────────────
 # Override via environment variable TARGET_ISINS (comma-separated)
-_DEFAULT_TARGETS = [
+_US_TARGETS = [
     # ── 科技 (12) ──
     "US0378331005",   # AAPL  — Apple
     "US5949181045",   # MSFT  — Microsoft
@@ -64,6 +64,36 @@ _DEFAULT_TARGETS = [
     "US29355A1079",   # ENPH  — Enphase Energy
     "US6745991058",   # OXY   — Occidental
 ]
+
+_UK_TARGETS = [
+    # ── 銀行 & 金融 (5) ──
+    "GB0031348658",   # BARC.L — Barclays
+    "GB0005405286",   # HSBA.L — HSBC Holdings
+    "GB00B16GWD56",   # LLOY.L — Lloyds Banking Group
+    "GB0008706128",   # NWG.L  — NatWest Group
+    "GB00BN7SWP63",   # LSEG.L — London Stock Exchange Group
+    # ── 能源 (2) ──
+    "GB0007980591",   # BP.L   — BP
+    "GB00B03MLX29",   # SHEL.L — Shell
+    # ── 消費品 & 醫藥 (3) ──
+    "GB0006731235",   # AZN.L  — AstraZeneca
+    "GB0009895292",   # DGE.L  — Diageo
+    "GB00B10RZP78",   # ULVR.L — Unilever
+    # ── 礦業 (4) ──
+    "GB0000566504",   # RIO.L  — Rio Tinto
+    "AU000000BHP4",   # BHP.L  — BHP Group
+    "GB00B2B0DG97",   # GLEN.L — Glencore
+    "JE00B4T3BW64",   # AAL.L  — Anglo American
+    # ── 其他 (6) ──
+    "GB00BH4HKS39",   # VOD.L  — Vodafone
+    "GB0001383545",   # AV.L   — Aviva
+    "GB0002162385",   # STAN.L — Standard Chartered
+    "GB00B0744B38",   # TSCO.L — Tesco
+    "GB00BDCPN049",   # RELX.L — RELX
+    "GB00B1XZS820",   # RR.L   — Rolls-Royce
+]
+
+_DEFAULT_TARGETS = _US_TARGETS + _UK_TARGETS
 
 
 def _configure_logging() -> None:
@@ -148,13 +178,13 @@ async def main() -> None:
         # ── Job definitions ────────────────────────────────────────
 
         async def trading_job() -> None:
-            """15-minute market scan → intelligence → decision → execution."""
+            """US market scan — runs during NYSE hours."""
             nonlocal last_cycle_record_ids
-            logger.info("=== Trading cycle started ===")
+            logger.info("=== US Trading cycle started (%d stocks) ===", len(us_isins))
             t0 = time.monotonic()
 
             try:
-                results = await system.run_cycle(target_isins)
+                results = await system.run_cycle(us_isins)
                 elapsed = time.monotonic() - t0
 
                 # Collect audit IDs for later reflection
@@ -166,7 +196,7 @@ async def main() -> None:
                 held = sum(1 for r in results if r.get("action") == "HOLD")
 
                 logger.info(
-                    "Trading cycle done in %.1fs — "
+                    "US Trading cycle done in %.1fs — "
                     "%d submitted, %d vetoed, %d held, %d total",
                     elapsed, submitted, vetoed, held, len(results),
                 )
@@ -248,23 +278,76 @@ async def main() -> None:
             except Exception:
                 logger.exception("Learning report generation failed")
 
+        # ── Separate target lists by market ───────────────────────────
+        us_isins = [i for i in target_isins if i.startswith("US")]
+        uk_isins = [i for i in target_isins if not i.startswith("US")]
+
+        async def uk_trading_job() -> None:
+            """UK market scan — runs during LSE hours."""
+            if not uk_isins:
+                return
+            nonlocal last_cycle_record_ids
+            logger.info("=== UK Trading cycle started (%d stocks) ===", len(uk_isins))
+            t0 = time.monotonic()
+
+            try:
+                results = await system.run_cycle(uk_isins)
+                elapsed = time.monotonic() - t0
+
+                record_ids = [r["audit_id"] for r in results if "audit_id" in r]
+                last_cycle_record_ids.extend(record_ids)
+
+                submitted = sum(1 for r in results if r.get("order_status") == "SUBMITTED")
+                vetoed = sum(1 for r in results if r.get("order_status") == "COMPLIANCE_VETOED")
+                held = sum(1 for r in results if r.get("action") == "HOLD")
+
+                logger.info(
+                    "UK Trading cycle done in %.1fs — "
+                    "%d submitted, %d vetoed, %d held, %d total",
+                    elapsed, submitted, vetoed, held, len(results),
+                )
+
+                for r in results:
+                    await notifier.send_trade_alert(r)
+                await notifier.send_cycle_summary(results, elapsed)
+
+            except Exception:
+                logger.exception("UK Trading cycle failed unexpectedly")
+
         # ── 4. Configure APScheduler ───────────────────────────────
         scheduler = AsyncIOScheduler()
 
-        # Rule A: Every 15 min during US market hours (UTC 13:30-20:00)
-        # Mon-Fri, hours 13-19, every 15 min
-        scheduler.add_job(
-            trading_job,
-            CronTrigger(
-                day_of_week="mon-fri",
-                hour="13-19",
-                minute="*/15",
-                timezone="UTC",
-            ),
-            id="trading_cycle",
-            name="15-min market scan",
-            misfire_grace_time=300,
-        )
+        # Rule A1: UK market — Every 15 min during LSE hours (UTC 08:00-16:30)
+        # Mon-Fri, hours 8-15 (last scan at 15:45)
+        if uk_isins:
+            scheduler.add_job(
+                uk_trading_job,
+                CronTrigger(
+                    day_of_week="mon-fri",
+                    hour="8-15",
+                    minute="*/15",
+                    timezone="UTC",
+                ),
+                id="uk_trading_cycle",
+                name="UK 15-min market scan",
+                misfire_grace_time=300,
+            )
+
+        # Rule A2: US market — Every 15 min during NYSE hours (UTC 13:30-20:00)
+        # Mon-Fri, hours 13-19
+        if us_isins:
+            scheduler.add_job(
+                trading_job,
+                CronTrigger(
+                    day_of_week="mon-fri",
+                    hour="13-19",
+                    minute="*/15",
+                    timezone="UTC",
+                ),
+                id="us_trading_cycle",
+                name="US 15-min market scan",
+                misfire_grace_time=300,
+            )
 
         # Rule B: Daily post-market sync & reflection (UTC 20:30)
         scheduler.add_job(

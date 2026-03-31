@@ -31,11 +31,12 @@ from src.compliance.watchdog import ComplianceWatchdog
 from src.core.client import Trading212Client
 from src.core.cognitive_loop import CognitiveLoop
 from src.core.virtual_account import VirtualAccountManager, VirtualSubAccount
-from src.data.pipelines.isin_mapper import ISINMapper
+from src.data.pipelines.isin_mapper import ISINMapper, MARKET_US, MARKET_UK
 from src.data.providers.alpha_vantage import AlphaVantageProvider
 from src.data.providers.finnhub import FinnhubProvider
 from src.data.providers.intrinio import IntrinioProvider
 from src.data.providers.polygon import PolygonProvider
+from src.data.providers.yfinance_provider import YFinanceProvider
 from src.memory.counterfactual_replay import CounterfactualReplayEngine
 from src.memory.episodic_memory import EpisodicMemory
 from src.prompts.adaptive_opro import AdaptiveOPRO
@@ -92,6 +93,7 @@ class TradingSystem:
         self._polygon = PolygonProvider(data_config.polygon_key)
         self._finnhub = FinnhubProvider(data_config.finnhub_key)
         self._intrinio = IntrinioProvider(data_config.intrinio_key)
+        self._yfinance = YFinanceProvider()  # free, no API key needed
 
         # Intelligence layer
         self._fundamental = FundamentalAgent(self._av, self._intrinio)
@@ -160,6 +162,7 @@ class TradingSystem:
         await self._polygon.__aenter__()
         await self._finnhub.__aenter__()
         await self._intrinio.__aenter__()
+        await self._yfinance.__aenter__()
         return self
 
     async def __aexit__(self, *exc: object) -> None:
@@ -169,6 +172,7 @@ class TradingSystem:
             self._polygon.close(),
             self._finnhub.close(),
             self._intrinio.close(),
+            self._yfinance.close(),
             return_exceptions=True,
         )
 
@@ -194,9 +198,10 @@ class TradingSystem:
             self._polygon.health_check(),
             self._finnhub.health_check(),
             self._intrinio.health_check(),
+            self._yfinance.health_check(),
             return_exceptions=True,
         )
-        providers = ["AlphaVantage", "Polygon", "Finnhub", "Intrinio"]
+        providers = ["AlphaVantage", "Polygon", "Finnhub", "Intrinio", "YFinance"]
         for name, ok in zip(providers, health_checks):
             status = "OK" if ok is True else f"DEGRADED ({ok})"
             logger.info("Provider %s: %s", name, status)
@@ -252,14 +257,14 @@ class TradingSystem:
             if not t212_ticker:
                 logger.warning("ISIN %s not found in mapper — skipping", isin)
                 continue
-            # market_ticker = standard US ticker for external data APIs (AAPL, AMD)
-            # t212_ticker = T212 internal code for execution (AAPL_US_EQ or APCd_EQ)
-            # NOTE: T212 may return European exchange codes (APCd_EQ for Apple),
-            # so we use ISIN-based lookup (static map) for reliable US ticker resolution.
+            # market_ticker = standard ticker for external data APIs
+            #   US: 'AAPL', 'AMD' (for Polygon/AlphaVantage)
+            #   UK: 'BARC.L', 'BP.L' (for YFinance)
             market_ticker = self._mapper.standard_ticker_for_isin(isin)
+            market = self._mapper.market_for_isin(isin)
             if not market_ticker:
                 logger.warning(
-                    "ISIN %s → T212 ticker %s but no standard US ticker found — skipping",
+                    "ISIN %s → T212 ticker %s but no standard ticker found — skipping",
                     isin, t212_ticker,
                 )
                 continue
@@ -267,6 +272,7 @@ class TradingSystem:
                 "isin": isin,
                 "ticker": market_ticker,
                 "t212_ticker": t212_ticker,
+                "market": market,
             })
 
         if not contexts:
@@ -277,8 +283,10 @@ class TradingSystem:
         views = await self._intelligence.evaluate_batch(contexts)
 
         # ── 4. Fetch price data for decision/risk layer ───────────────
+        market_map = {c["ticker"]: c.get("market", MARKET_US) for c in contexts}
         price_map, returns_map, atr_map, closes_map = await self._fetch_price_data(
-            [c["ticker"] for c in contexts]
+            [c["ticker"] for c in contexts],
+            market_map=market_map,
         )
 
         # ── 4b. Detect market regime from aggregate price data ────────
@@ -350,20 +358,39 @@ class TradingSystem:
     # ── internal helpers ──────────────────────────────────────────────
 
     async def _fetch_price_data(
-        self, tickers: list[str],
+        self, tickers: list[str], market_map: dict[str, str] | None = None,
     ) -> tuple[dict[str, float], dict[str, np.ndarray], dict[str, float | None], dict[str, np.ndarray]]:
-        """Fetch current prices, historical returns, ATR, and raw closes for each ticker."""
+        """Fetch current prices, historical returns, ATR, and raw closes for each ticker.
+
+        Parameters
+        ----------
+        tickers : list of ticker strings
+        market_map : optional dict mapping ticker → market ('US' or 'UK').
+            If provided, UK tickers use YFinance; US tickers use Polygon.
+            If not provided, all tickers use Polygon (backward compatible).
+        """
         price_map: dict[str, float] = {}
         returns_map: dict[str, np.ndarray] = {}
         atr_map: dict[str, float | None] = {}
         closes_map: dict[str, np.ndarray] = {}
+        _market_map = market_map or {}
 
         async def _fetch_one(ticker: str) -> None:
             try:
-                # aggregates() now returns list[OHLCVBar] (standardized)
-                bars = await self._polygon.daily_bars(ticker, days=365)
+                market = _market_map.get(ticker, MARKET_US)
+
+                # Route to correct data provider based on market
+                if market == MARKET_UK:
+                    bars = await self._yfinance.daily_bars(ticker, days=365)
+                else:
+                    bars = await self._polygon.daily_bars(ticker, days=365)
+
                 if not bars:
-                    return
+                    # Fallback: try YFinance for US stocks too if Polygon fails
+                    if market == MARKET_US:
+                        bars = await self._yfinance.daily_bars(ticker, days=365)
+                    if not bars:
+                        return
 
                 closes = np.array([b.close for b in bars], dtype=np.float64)
                 highs = np.array([b.high for b in bars], dtype=np.float64)

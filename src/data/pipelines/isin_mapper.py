@@ -19,59 +19,112 @@ from dataclasses import dataclass, field
 
 logger = logging.getLogger(__name__)
 
-# ── Static ISIN → Standard US Ticker Map ─────────────────────────
+# ── Market identifier ────────────────────────────────────────────
+# Used to route tickers to the correct data provider and schedule.
+MARKET_US = "US"
+MARKET_UK = "UK"
+
+# ── Static ISIN → Standard Ticker Map ────────────────────────────
 # ISIN is the universal security identifier. T212 may return arbitrary
 # exchange codes (APCd_EQ, MSFd_EQ, TL0d_EQ etc.) that are useless
 # for external data providers. This table maps ISINs to standard
-# US market tickers that Polygon/AlphaVantage/Finnhub understand.
-_ISIN_TO_US_TICKER: dict[str, str] = {
+# market tickers that data providers understand.
+#
+# Format: ISIN → (ticker, market)
+#   US: plain ticker e.g. "AAPL"
+#   UK: LSE ticker e.g. "BARC.L" (Yahoo Finance format)
+_ISIN_TO_TICKER: dict[str, tuple[str, str]] = {
+    # ══════════════════════════════════════════════════════════════
+    # US STOCKS (美股)
+    # ══════════════════════════════════════════════════════════════
     # ── 科技 (Technology) ──
-    "US0378331005": "AAPL",     # Apple
-    "US5949181045": "MSFT",     # Microsoft
-    "US67066G1040": "NVDA",     # NVIDIA
-    "US88160R1014": "TSLA",     # Tesla
-    "US0231351067": "AMZN",     # Amazon
-    "US02079K3059": "GOOGL",    # Alphabet (Class A)
-    "US02079K1079": "GOOG",     # Alphabet (Class C)
-    "US30303M1027": "META",     # Meta Platforms
-    "US11135F1012": "AVGO",     # Broadcom
-    "US12652L1008": "CRM",      # Salesforce
-    "US0079031078": "AMD",      # AMD
-    "US68389X1054": "ORCL",     # Oracle
-    "US4581401001": "INTC",     # Intel
+    "US0378331005": ("AAPL", MARKET_US),     # Apple
+    "US5949181045": ("MSFT", MARKET_US),     # Microsoft
+    "US67066G1040": ("NVDA", MARKET_US),     # NVIDIA
+    "US88160R1014": ("TSLA", MARKET_US),     # Tesla
+    "US0231351067": ("AMZN", MARKET_US),     # Amazon
+    "US02079K3059": ("GOOGL", MARKET_US),    # Alphabet (Class A)
+    "US02079K1079": ("GOOG", MARKET_US),     # Alphabet (Class C)
+    "US30303M1027": ("META", MARKET_US),     # Meta Platforms
+    "US11135F1012": ("AVGO", MARKET_US),     # Broadcom
+    "US12652L1008": ("CRM", MARKET_US),      # Salesforce
+    "US0079031078": ("AMD", MARKET_US),      # AMD
+    "US68389X1054": ("ORCL", MARKET_US),     # Oracle
+    "US4581401001": ("INTC", MARKET_US),     # Intel
     # ── 能源 (Energy) ──
-    "US30231G1022": "XOM",      # Exxon Mobil
-    "US1667641005": "CVX",      # Chevron
-    "US20825C1045": "COP",      # ConocoPhillips
-    "US8064071025": "SLB",      # Schlumberger
-    "US26875P1012": "EOG",      # EOG Resources
-    "US65339F1012": "NEE",      # NextEra Energy
-    "US29355A1079": "ENPH",     # Enphase Energy
-    "US6745991058": "OXY",      # Occidental Petroleum
+    "US30231G1022": ("XOM", MARKET_US),      # Exxon Mobil
+    "US1667641005": ("CVX", MARKET_US),      # Chevron
+    "US20825C1045": ("COP", MARKET_US),      # ConocoPhillips
+    "US8064071025": ("SLB", MARKET_US),      # Schlumberger
+    "US26875P1012": ("EOG", MARKET_US),      # EOG Resources
+    "US65339F1012": ("NEE", MARKET_US),      # NextEra Energy
+    "US29355A1079": ("ENPH", MARKET_US),     # Enphase Energy
+    "US6745991058": ("OXY", MARKET_US),      # Occidental Petroleum
     # ── 金融 (Financials) ──
-    "US46625H1005": "JPM",      # JPMorgan Chase
-    "US0605051046": "BAC",      # Bank of America
-    "US9311421039": "WMT",      # Walmart
-    "US7427181091": "PG",       # Procter & Gamble
-    "US4781601046": "JNJ",      # Johnson & Johnson
-    "US92826C8394": "V",        # Visa
-    "US5801351017": "MCD",      # McDonald's
-    "US2546871060": "DIS",      # Disney
-    "US17275R1023": "CSCO",     # Cisco
-    "US7170811035": "PFE",      # Pfizer
-    "US0846707026": "BRK.B",    # Berkshire Hathaway B
-    "US0258161092": "AXP",      # American Express
+    "US46625H1005": ("JPM", MARKET_US),      # JPMorgan Chase
+    "US0605051046": ("BAC", MARKET_US),      # Bank of America
+    "US9311421039": ("WMT", MARKET_US),      # Walmart
+    "US7427181091": ("PG", MARKET_US),       # Procter & Gamble
+    "US4781601046": ("JNJ", MARKET_US),      # Johnson & Johnson
+    "US92826C8394": ("V", MARKET_US),        # Visa
+    "US5801351017": ("MCD", MARKET_US),      # McDonald's
+    "US2546871060": ("DIS", MARKET_US),      # Disney
+    "US17275R1023": ("CSCO", MARKET_US),     # Cisco
+    "US7170811035": ("PFE", MARKET_US),      # Pfizer
+    "US0846707026": ("BRK.B", MARKET_US),    # Berkshire Hathaway B
+    "US0258161092": ("AXP", MARKET_US),      # American Express
     # ── 其他熱門 ──
-    "US0970231058": "BA",       # Boeing
-    "US00724F1012": "ADBE",     # Adobe
-    "US6541061031": "NFLX",     # Netflix
-    "US79466L3024": "SBUX",     # Starbucks
-    "US7960542030": "SHOP",     # Shopify
-    "US55354G1004": "MRVL",     # Marvell Technology
-    "US46120E6023": "INTU",     # Intuit
-    "US5324571083": "LLY",      # Eli Lilly
-    "US58933Y1055": "MRK",      # Merck
-    "US0028241000": "ABBV",     # AbbVie
+    "US0970231058": ("BA", MARKET_US),       # Boeing
+    "US00724F1012": ("ADBE", MARKET_US),     # Adobe
+    "US6541061031": ("NFLX", MARKET_US),     # Netflix
+    "US79466L3024": ("SBUX", MARKET_US),     # Starbucks
+    "US7960542030": ("SHOP", MARKET_US),     # Shopify
+    "US55354G1004": ("MRVL", MARKET_US),     # Marvell Technology
+    "US46120E6023": ("INTU", MARKET_US),     # Intuit
+    "US5324571083": ("LLY", MARKET_US),      # Eli Lilly
+    "US58933Y1055": ("MRK", MARKET_US),      # Merck
+    "US0028241000": ("ABBV", MARKET_US),     # AbbVie
+    # ══════════════════════════════════════════════════════════════
+    # UK STOCKS (英股) — London Stock Exchange
+    # ══════════════════════════════════════════════════════════════
+    # Yahoo Finance format: TICKER.L
+    # ── 銀行 & 金融 ──
+    "GB0031348658": ("BARC.L", MARKET_UK),   # Barclays
+    "GB0005405286": ("HSBA.L", MARKET_UK),   # HSBC Holdings
+    "GB00B16GWD56": ("LLOY.L", MARKET_UK),   # Lloyds Banking Group
+    "GB0008706128": ("NWG.L", MARKET_UK),    # NatWest Group
+    "GB00BN7SWP63": ("LSEG.L", MARKET_UK),  # London Stock Exchange Group
+    # ── 能源 & 石油 ──
+    "GB0007980591": ("BP.L", MARKET_UK),     # BP
+    "GB00B03MLX29": ("SHEL.L", MARKET_UK),   # Shell
+    # ── 消費品 ──
+    "GB00B24CGK77": ("RECKITT.L", MARKET_UK),# Reckitt Benckiser → actual ticker RKT.L
+    "GB0006731235": ("AZN.L", MARKET_UK),    # AstraZeneca
+    "GB00BN7SWP63": ("LSEG.L", MARKET_UK),  # LSE Group
+    "GB0009895292": ("DGE.L", MARKET_UK),    # Diageo
+    "GB00B10RZP78": ("ULVR.L", MARKET_UK),   # Unilever
+    # ── 礦業 & 原材料 ──
+    "GB0000566504": ("RIO.L", MARKET_UK),    # Rio Tinto
+    "AU000000BHP4": ("BHP.L", MARKET_UK),    # BHP Group
+    "GB00B2B0DG97": ("GLEN.L", MARKET_UK),   # Glencore
+    "JE00B4T3BW64": ("AAL.L", MARKET_UK),   # Anglo American
+    # ── 電信 & 科技 ──
+    "GB00BH4HKS39": ("VOD.L", MARKET_UK),   # Vodafone
+    # ── 保險 & 其他金融 ──
+    "GB00B0SWJX34": ("PHNX.L", MARKET_UK),  # Phoenix Group
+    "GB0001383545": ("AV.L", MARKET_UK),     # Aviva
+    "GB0002162385": ("STAN.L", MARKET_UK),   # Standard Chartered
+    # ── 其他 ──
+    "GB00B0744B38": ("TSCO.L", MARKET_UK),   # Tesco
+    "GB00BDCPN049": ("RELX.L", MARKET_UK),   # RELX (Reed Elsevier)
+    "IE000S9YS762": ("EXPN.L", MARKET_UK),   # Experian
+    "GB00B1XZS820": ("RR.L", MARKET_UK),     # Rolls-Royce
+    "GB0007188757": ("RTO.L", MARKET_UK),    # Rentokil Initial
+}
+
+# ── Backward-compatible flat map: ISIN → ticker string ───────────
+_ISIN_TO_US_TICKER: dict[str, str] = {
+    isin: ticker for isin, (ticker, market) in _ISIN_TO_TICKER.items()
 }
 
 
@@ -144,25 +197,46 @@ class ISINMapper:
 
     def standard_ticker_for_isin(self, isin: str) -> str:
         """
-        Get the standard US market ticker for an ISIN.
+        Get the standard market ticker for an ISIN.
 
         Priority:
-          1. Static ISIN → US ticker map (most reliable)
+          1. Static ISIN → ticker map (most reliable)
           2. Parse T212 ticker code (fallback)
 
         Returns
         -------
-        Standard ticker like 'AAPL', 'MSFT', 'TSLA' etc.
+        Standard ticker like 'AAPL', 'BARC.L', etc.
         """
         # 1. Check static map first (always correct)
+        if isin in _ISIN_TO_TICKER:
+            return _ISIN_TO_TICKER[isin][0]
+
+        # 2. Backward compat: check flat US map
         if isin in _ISIN_TO_US_TICKER:
             return _ISIN_TO_US_TICKER[isin]
 
-        # 2. Fallback: try to parse from T212 ticker
+        # 3. Fallback: try to parse from T212 ticker
         t212_ticker = self.ticker_for_isin(isin)
         if t212_ticker:
             return self.to_standard_ticker(t212_ticker)
 
+        return ""
+
+    def market_for_isin(self, isin: str) -> str:
+        """
+        Get the market identifier for an ISIN.
+
+        Returns
+        -------
+        'US', 'UK', or '' if unknown.
+        """
+        if isin in _ISIN_TO_TICKER:
+            return _ISIN_TO_TICKER[isin][1]
+        # Default: assume US if ISIN starts with US
+        if isin.startswith("US"):
+            return MARKET_US
+        if isin.startswith("GB") or isin.startswith("IE") or isin.startswith("JE"):
+            return MARKET_UK
         return ""
 
     @staticmethod

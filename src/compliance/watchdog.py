@@ -100,14 +100,15 @@ class ComplianceWatchdog:
 
     @staticmethod
     def _is_market_hours() -> bool:
-        """Check if current UTC time is within US market hours (13:30-20:00).
+        """Check if current UTC time is within any active market hours.
 
-        Matches the trading cron schedule (hour 13-19, every 15 min).
-        The last trading cycle starts at 19:45, so we consider the market
-        "active" until 20:00 to allow for cycle completion.
+        Multi-market schedule (weekdays only):
+          UK (LSE):  08:00 - 16:30 UTC
+          US (NYSE): 13:30 - 20:00 UTC
+          Combined:  08:00 - 20:00 UTC
         """
         now = datetime.now(timezone.utc)
-        return now.weekday() < 5 and 13 <= now.hour < 20
+        return now.weekday() < 5 and 8 <= now.hour < 20
 
     async def start(self) -> None:
         """Start the watchdog monitoring loop."""
