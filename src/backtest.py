@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import json
 import logging
 import os
 import time
@@ -506,6 +507,44 @@ class BacktestResult:
     opro_generations: int = 0
     daily_nav: list[dict[str, Any]] = field(default_factory=list)
     weight_evolution: list[dict[str, Any]] = field(default_factory=list)
+    benchmark_nav: list[dict[str, Any]] = field(default_factory=list)
+    benchmark_return_pct: float = 0.0
+    tickers: list[str] = field(default_factory=list)
+    start_date: str = ""
+    end_date: str = ""
+
+    def to_dict(self) -> dict[str, Any]:
+        """Serialize to JSON-compatible dict."""
+        import json
+        return {
+            "initial_capital": self.initial_capital,
+            "final_nav": self.final_nav,
+            "total_return_pct": self.total_return_pct,
+            "max_drawdown_pct": self.max_drawdown_pct,
+            "total_trades": self.total_trades,
+            "win_rate": self.win_rate,
+            "sharpe_ratio": self.sharpe_ratio,
+            "opro_generations": self.opro_generations,
+            "tickers": self.tickers,
+            "start_date": self.start_date,
+            "end_date": self.end_date,
+            "benchmark_return_pct": self.benchmark_return_pct,
+            "daily_nav": [
+                {"date": d["date"].isoformat() if hasattr(d["date"], "isoformat") else str(d["date"]),
+                 "nav": d["nav"]}
+                for d in self.daily_nav
+            ],
+            "benchmark_nav": [
+                {"date": d["date"].isoformat() if hasattr(d["date"], "isoformat") else str(d["date"]),
+                 "nav": d["nav"]}
+                for d in self.benchmark_nav
+            ],
+            "weight_evolution": [
+                {k: (v.isoformat() if hasattr(v, "isoformat") else v)
+                 for k, v in w.items()}
+                for w in self.weight_evolution
+            ],
+        }
 
 
 class DecadeBacktester:
@@ -973,8 +1012,25 @@ class DecadeBacktester:
                     )
 
             # =========================================================
-            # Progress logging (per year)
+            # Progress logging + file (for dashboard polling)
             # =========================================================
+            if day_idx % 50 == 0 or current_dt.year != last_log_year:
+                progress = {
+                    "status": "running",
+                    "day": day_idx,
+                    "total_days": len(trading_days),
+                    "pct": round(day_idx / len(trading_days) * 100, 1),
+                    "current_date": date_str,
+                    "nav": round(nav, 2),
+                    "trades": trade_count,
+                }
+                try:
+                    progress_path = os.path.join(self._data_dir, "backtest_progress.json")
+                    with open(progress_path, "w") as f:
+                        json.dump(progress, f)
+                except OSError:
+                    pass
+
             if current_dt.year != last_log_year:
                 last_log_year = current_dt.year
                 elapsed = time.monotonic() - t_start
@@ -1014,6 +1070,32 @@ class DecadeBacktester:
         total_closed = win_count + loss_count
         win_rate = win_count / total_closed if total_closed > 0 else 0.0
 
+        # ── Benchmark: S&P 500 buy-and-hold ─────────────────────────
+        benchmark_nav_list: list[dict[str, Any]] = []
+        benchmark_return = 0.0
+        try:
+            import yfinance as yf
+            spy_df = yf.download(
+                "SPY", start=self.start_date, end=self.end_date,
+                progress=False, auto_adjust=True,
+            )
+            if isinstance(spy_df.columns, pd.MultiIndex):
+                spy_df.columns = spy_df.columns.get_level_values(0)
+            if not spy_df.empty:
+                spy_start_price = float(spy_df.iloc[0]["Close"])
+                for dt, row in spy_df.iterrows():
+                    bm_nav = self.initial_capital * float(row["Close"]) / spy_start_price
+                    benchmark_nav_list.append({"date": dt, "nav": bm_nav})
+                benchmark_return = (
+                    (benchmark_nav_list[-1]["nav"] - self.initial_capital)
+                    / self.initial_capital * 100
+                )
+                logger.info(
+                    "  Benchmark (SPY): %.2f%% return", benchmark_return,
+                )
+        except Exception as e:
+            logger.warning("Benchmark computation failed: %s", e)
+
         result = BacktestResult(
             initial_capital=self.initial_capital,
             final_nav=final_nav,
@@ -1025,6 +1107,11 @@ class DecadeBacktester:
             opro_generations=opro._generation,
             daily_nav=daily_nav,
             weight_evolution=weight_evolution_history,
+            benchmark_nav=benchmark_nav_list,
+            benchmark_return_pct=benchmark_return,
+            tickers=self.tickers,
+            start_date=self.start_date,
+            end_date=self.end_date,
         )
 
         logger.info("=" * 60)
@@ -1044,6 +1131,17 @@ class DecadeBacktester:
 
         # ── 6. Generate tearsheet ────────────────────────────────────
         self._generate_tearsheet(result)
+
+        # ── 7. Persist results as JSON (for dashboard) ────────────
+        results_path = os.path.join(self._data_dir, "backtest_results.json")
+        with open(results_path, "w", encoding="utf-8") as f:
+            json.dump(result.to_dict(), f, indent=2, ensure_ascii=False)
+        logger.info("Results saved to %s", results_path)
+
+        # Mark progress as completed
+        progress_path = os.path.join(self._data_dir, "backtest_progress.json")
+        with open(progress_path, "w") as f:
+            json.dump({"status": "completed"}, f)
 
         # Persist final state
         account_manager.save_state()

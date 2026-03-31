@@ -601,6 +601,16 @@ if learning_report:
     with st.expander("Daily Learning Report (latest)", expanded=False):
         st.json(learning_report)
 
+st.divider()
+
+# ── Panel 6: Backtest Engine ──────────────────────────────────────
+
+st.header("\U0001f52c Backtest Engine")
+st.caption("Test the AI trading strategy against historical data with S&P 500 benchmark comparison.")
+
+from src.backtest_dashboard import render_backtest_page
+render_backtest_page()
+
 # ── Footer ─────────────────────────────────────────────────────────
 st.divider()
 foot1, foot2 = st.columns([3, 1])
