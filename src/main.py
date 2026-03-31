@@ -125,6 +125,7 @@ async def main() -> None:
     from src.core.orchestrator import TradingSystem
     from src.core.virtual_account import VirtualAccountManager
     from src.notifications.telegram import TelegramNotifier
+    from src.notifications.discord import DiscordNotifier
 
     logger.info("=" * 60)
     logger.info("  AI Quantitative Trading System (Trading 212 Agentic MAS)")
@@ -152,6 +153,7 @@ async def main() -> None:
 
     # ── 3. Telegram notifier ─────────────────────────────────────
     notifier = TelegramNotifier.from_env()
+    discord = DiscordNotifier.from_env()
 
     # ── 4. Initialise with async context manager ──────────────────
     async with system:
@@ -163,12 +165,13 @@ async def main() -> None:
         )
 
         # Notify system startup
-        await notifier.send_system_event(
-            "START",
+        startup_msg = (
             f"Env: {env_name} | Bot: {bot_id}\n"
             f"Capital: ${initial_capital:,.2f}\n"
-            f"Targets: {len(target_isins)} stocks",
+            f"Targets: {len(target_isins)} stocks (US: {len(us_isins)}, UK: {len(uk_isins)})"
         )
+        await notifier.send_system_event("START", startup_msg)
+        await discord.send_system_event("START", startup_msg)
 
         # ── Cycle-level state ──────────────────────────────────────
         # Track audit record IDs from the last trading cycle
@@ -201,12 +204,12 @@ async def main() -> None:
                     elapsed, submitted, vetoed, held, len(results),
                 )
 
-                # ── Telegram notifications ─────────────────────
-                # Send individual trade alerts
+                # ── Notifications ─────────────────────────────
                 for r in results:
                     await notifier.send_trade_alert(r)
-                # Send cycle summary (only if trades were made)
+                    await discord.send_trade_alert(r)
                 await notifier.send_cycle_summary(results, elapsed)
+                await discord.send_cycle_summary(results, elapsed)
 
             except Exception:
                 logger.exception("Trading cycle failed unexpectedly")
@@ -272,8 +275,9 @@ async def main() -> None:
                 with open(report_path, "w", encoding="utf-8") as f:
                     json.dump(summary, f, indent=2, default=str, ensure_ascii=False)
 
-                # Send daily summary to Telegram
+                # Send daily summary
                 await notifier.send_daily_summary(summary)
+                await discord.send_daily_summary(summary)
 
             except Exception:
                 logger.exception("Learning report generation failed")
@@ -309,7 +313,9 @@ async def main() -> None:
 
                 for r in results:
                     await notifier.send_trade_alert(r)
+                    await discord.send_trade_alert(r)
                 await notifier.send_cycle_summary(results, elapsed)
+                await discord.send_cycle_summary(results, elapsed)
 
             except Exception:
                 logger.exception("UK Trading cycle failed unexpectedly")
@@ -413,9 +419,11 @@ async def main() -> None:
         account_manager.save_state()
         system.watchdog.stop()
 
-        # Notify shutdown via Telegram
+        # Notify shutdown via Telegram + Discord
         await notifier.send_system_event("STOP", "Graceful shutdown complete.")
+        await discord.send_system_event("STOP", "Graceful shutdown complete.")
         await notifier.close()
+        await discord.close()
 
         logger.info("System shut down cleanly.")
 
