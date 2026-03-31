@@ -11,9 +11,9 @@ __pycache__/
 venv/
 
 # Data & logs (runtime generated)
-data/
-logs/
-backups/
+/data/
+/logs/
+/backups/
 
 # IDE
 .vscode/
