@@ -49,6 +49,20 @@ class SystemConfig:
     POLYGON_KEY: str = os.getenv("POLYGON_KEY", "")
     FINNHUB_KEY: str = os.getenv("FINNHUB_KEY", "")
 
+    # --- Phase 6: 替代數據源 API 金鑰 ---
+    UNUSUAL_WHALES_KEY: str = os.getenv("UNUSUAL_WHALES_KEY", "")
+    FRED_API_KEY: str = os.getenv("FRED_API_KEY", "")
+    REDDIT_CLIENT_ID: str = os.getenv("REDDIT_CLIENT_ID", "")
+    REDDIT_CLIENT_SECRET: str = os.getenv("REDDIT_CLIENT_SECRET", "")
+
+    # --- Phase 6: 執行算法參數 ---
+    ORDER_SPLIT_THRESHOLD: float = float(os.getenv("ORDER_SPLIT_THRESHOLD", "5000"))
+    ORDER_SPLIT_MAX_SLICES: int = int(os.getenv("ORDER_SPLIT_MAX_SLICES", "10"))
+    TWAP_INTERVAL_SECONDS: float = float(os.getenv("TWAP_INTERVAL_SECONDS", "300"))
+    MAX_SLIPPAGE_BPS: float = float(os.getenv("MAX_SLIPPAGE_BPS", "50"))
+    AVOID_OPEN_MINUTES: int = int(os.getenv("AVOID_OPEN_MINUTES", "30"))
+    AVOID_CLOSE_MINUTES: int = int(os.getenv("AVOID_CLOSE_MINUTES", "15"))
+
 
 # ── 全域單例 ─────────────────────────────────────────────────────
 config = SystemConfig()
@@ -113,3 +127,8 @@ class DataSourceConfig:
     polygon_key: str = field(default_factory=lambda: os.getenv("POLYGON_KEY", ""))
     finnhub_key: str = field(default_factory=lambda: os.getenv("FINNHUB_KEY", ""))
     intrinio_key: str = field(default_factory=lambda: os.getenv("INTRINIO_KEY", ""))
+    # Phase 6: Alternative data sources
+    unusual_whales_key: str = field(default_factory=lambda: os.getenv("UNUSUAL_WHALES_KEY", ""))
+    fred_api_key: str = field(default_factory=lambda: os.getenv("FRED_API_KEY", ""))
+    reddit_client_id: str = field(default_factory=lambda: os.getenv("REDDIT_CLIENT_ID", ""))
+    reddit_client_secret: str = field(default_factory=lambda: os.getenv("REDDIT_CLIENT_SECRET", ""))

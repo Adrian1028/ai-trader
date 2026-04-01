@@ -60,9 +60,9 @@ _DEFAULT_PARAMETERS = {
     "weight_sentiment": 0.25,
 
     # Decision thresholds
-    "min_confidence_to_trade": 0.30,
-    "min_buy_score": 0.30,
-    "max_sell_score": -0.30,
+    "min_confidence_to_trade": 0.05,
+    "min_buy_score": 0.10,
+    "max_sell_score": -0.10,
 
     # Risk tuning
     "atr_stop_multiplier": 2.0,

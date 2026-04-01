@@ -75,9 +75,9 @@ class TradeProposal:
 
 
 # Minimum thresholds to act
-_MIN_CONFIDENCE_TO_TRADE = 0.15
-_MIN_SCORE_TO_BUY = 0.2
-_MAX_SCORE_TO_SELL = -0.2
+_MIN_CONFIDENCE_TO_TRADE = 0.05
+_MIN_SCORE_TO_BUY = 0.10
+_MAX_SCORE_TO_SELL = -0.10
 
 
 class DecisionFusionAgent:

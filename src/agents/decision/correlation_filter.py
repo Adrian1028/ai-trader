@@ -41,9 +41,9 @@ import numpy as np
 logger = logging.getLogger(__name__)
 
 # ── Thresholds ───────────────────────────────────────────────────
-_CORR_BLOCK_THRESHOLD = 0.85       # block new position above this
-_CORR_PENALIZE_THRESHOLD = 0.70    # reduce size above this
-_CORR_PENALTY_FACTOR = 0.50        # multiply quantity by this when penalized
+_CORR_BLOCK_THRESHOLD = 0.92       # block new position above this
+_CORR_PENALIZE_THRESHOLD = 0.80    # reduce size above this
+_CORR_PENALTY_FACTOR = 0.70        # multiply quantity by this when penalized
 _PORTFOLIO_AVG_CORR_WARN = 0.60    # warn when portfolio avg corr exceeds this
 _MIN_OVERLAP_DAYS = 30             # need at least 30 overlapping return days
 _ROLLING_WINDOW = 60               # use last 60 days for correlation
@@ -202,6 +202,71 @@ class CorrelationFilter:
 
         logger.debug("[CorrelationFilter] %s", result.summary)
         return result
+
+    # ══════════════════════════════════════════════════════════════
+    # Covariance matrix (for portfolio optimizer)
+    # ══════════════════════════════════════════════════════════════
+
+    def get_covariance_matrix(
+        self,
+        returns_map: dict[str, np.ndarray],
+        tickers: list[str] | None = None,
+    ) -> tuple[list[str], np.ndarray]:
+        """
+        Compute the covariance matrix from return series.
+
+        Reuses the same alignment logic as compute_matrix() but returns
+        the covariance matrix instead of the correlation matrix.
+        Used by BlackLittermanOptimizer and RiskParityAllocator.
+
+        Parameters
+        ----------
+        returns_map : ticker → array of daily log returns
+        tickers : subset of tickers (default: all)
+
+        Returns
+        -------
+        (ordered_tickers, cov_matrix) where cov_matrix is (N, N)
+        """
+        if tickers is None:
+            tickers = list(returns_map.keys())
+
+        valid_tickers = [
+            t for t in tickers
+            if t in returns_map and len(returns_map[t]) >= self._min_overlap
+        ]
+
+        if len(valid_tickers) < 1:
+            return [], np.array([])
+
+        window = self._window
+        aligned: list[np.ndarray] = []
+        final_tickers: list[str] = []
+
+        for t in valid_tickers:
+            r = returns_map[t]
+            if len(r) >= window:
+                aligned.append(r[-window:])
+                final_tickers.append(t)
+            elif len(r) >= self._min_overlap:
+                aligned.append(r[-self._min_overlap:])
+                final_tickers.append(t)
+
+        if not final_tickers:
+            return [], np.array([])
+
+        min_len = min(len(a) for a in aligned)
+        truncated = np.array([a[-min_len:] for a in aligned])
+
+        # np.cov expects rows as variables, columns as observations
+        cov_matrix = np.cov(truncated)
+
+        # Handle single-asset case (np.cov returns scalar)
+        if cov_matrix.ndim == 0:
+            cov_matrix = np.array([[float(cov_matrix)]])
+
+        cov_matrix = np.nan_to_num(cov_matrix, nan=0.0)
+        return final_tickers, cov_matrix
 
     # ══════════════════════════════════════════════════════════════
     # Check: Should this new trade be allowed?

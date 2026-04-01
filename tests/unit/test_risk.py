@@ -48,15 +48,18 @@ def returns():
 
 class TestVaR:
     def test_var_positive_for_volatile_asset(self, agent, returns):
-        var95, var99, es = agent._compute_var(returns, price=150.0)
+        var95, var99, es, cvar95, cvar99 = agent._compute_var(returns, price=150.0)
         assert var95 > 0
         assert var99 > var95
         assert es >= var95
+        assert cvar95 >= 0
+        assert cvar99 >= cvar95
 
     def test_var_zero_for_zero_volatility(self, agent):
         flat = np.zeros(50)
-        var95, var99, es = agent._compute_var(flat, price=100.0)
+        var95, var99, es, cvar95, cvar99 = agent._compute_var(flat, price=100.0)
         assert var95 == 0.0
+        assert cvar95 == 0.0
 
 
 class TestKelly:

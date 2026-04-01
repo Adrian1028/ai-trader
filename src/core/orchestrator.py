@@ -16,15 +16,26 @@ from typing import Any
 import numpy as np
 
 from config import T212Config, DataSourceConfig
+from config.settings import config
 from src.agents.audit.audit_trail import AuditTrailAgent
 from src.agents.decision.decision_fusion import DecisionFusionAgent, TradeAction
+from src.agents.decision.portfolio_optimizer import (
+    BlackLittermanOptimizer,
+    DynamicRebalancer,
+    RiskParityAllocator,
+)
 from src.agents.decision.risk import PortfolioRiskState, RiskAgent
+from src.agents.decision.stress_tester import StressTester
 from src.agents.execution.executor import ExecutionAgent
 from src.agents.intelligence.fundamental import FundamentalAgent
 from src.agents.intelligence.orchestrator import IntelligenceOrchestrator, MarketView
 from src.agents.intelligence.sentiment import SentimentAgent
 from src.agents.intelligence.gemini_strategist import GeminiStrategist
 from src.agents.intelligence.technical import TechnicalAgent
+from src.agents.intelligence.macro_agent import MacroAgent
+from src.agents.intelligence.insider_agent import InsiderTradingAgent
+from src.agents.intelligence.options_flow_agent import OptionsFlowAgent
+from src.agents.intelligence.social_sentiment_agent import SocialSentimentAgent
 from src.core.regime_detector import RegimeDetector, RegimeSnapshot
 from src.compliance.guard import ComplianceGuard
 from src.compliance.watchdog import ComplianceWatchdog
@@ -32,10 +43,17 @@ from src.core.client import Trading212Client
 from src.core.cognitive_loop import CognitiveLoop
 from src.core.virtual_account import VirtualAccountManager, VirtualSubAccount
 from src.data.pipelines.isin_mapper import ISINMapper, MARKET_US, MARKET_UK
+from src.agents.execution.slippage_model import SlippagePredictor
+from src.agents.execution.timing import SmartTiming
+from src.agents.execution.order_splitter import OrderSplitter
 from src.data.providers.alpha_vantage import AlphaVantageProvider
 from src.data.providers.finnhub import FinnhubProvider
 from src.data.providers.intrinio import IntrinioProvider
+from src.data.providers.macro import MacroDataProvider
+from src.data.providers.options_flow import OptionsFlowProvider
 from src.data.providers.polygon import PolygonProvider
+from src.data.providers.sec_edgar import SECEdgarProvider
+from src.data.providers.social_sentiment import SocialSentimentProvider
 from src.data.providers.yfinance_provider import YFinanceProvider
 from src.memory.counterfactual_replay import CounterfactualReplayEngine
 from src.memory.episodic_memory import EpisodicMemory
@@ -88,32 +106,74 @@ class TradingSystem:
             max_pending_per_instrument=t212_config.max_pending_orders_per_instrument,
         )
 
-        # Data providers
+        # Data providers (original)
         self._av = AlphaVantageProvider(data_config.alpha_vantage_key)
         self._polygon = PolygonProvider(data_config.polygon_key)
         self._finnhub = FinnhubProvider(data_config.finnhub_key)
         self._intrinio = IntrinioProvider(data_config.intrinio_key)
         self._yfinance = YFinanceProvider()  # free, no API key needed
 
-        # Intelligence layer
+        # Data providers (Phase 6: alternative data)
+        self._macro_provider = MacroDataProvider(data_config.fred_api_key)
+        self._sec_edgar = SECEdgarProvider()
+        self._options_flow_provider = OptionsFlowProvider(data_config.unusual_whales_key)
+        self._social_provider = SocialSentimentProvider(
+            client_id=data_config.reddit_client_id,
+            client_secret=data_config.reddit_client_secret,
+        )
+
+        # Intelligence layer (original 4 + Phase 6 new 4)
         self._fundamental = FundamentalAgent(self._av, self._intrinio)
         self._technical = TechnicalAgent(self._av, self._polygon)
         self._sentiment = SentimentAgent(self._finnhub)
         self._gemini = GeminiStrategist()  # reads GEMINI_API_KEY from env
+        self._macro_agent = MacroAgent(self._macro_provider)
+        self._insider_agent = InsiderTradingAgent(self._sec_edgar)
+        self._options_flow_agent = OptionsFlowAgent(self._options_flow_provider)
+        self._social_agent = SocialSentimentAgent(self._social_provider)
+
         self._intelligence = IntelligenceOrchestrator(
-            agents=[self._fundamental, self._technical, self._sentiment, self._gemini],
+            agents=[
+                self._fundamental, self._technical, self._sentiment, self._gemini,
+                self._macro_agent, self._insider_agent,
+                self._options_flow_agent, self._social_agent,
+            ],
         )
 
-        # Decision & Risk layer
+        # Decision & Risk layer (Phase 7: portfolio optimization + stress testing)
         self._risk = RiskAgent()
-        self._decision = DecisionFusionAgent(self._risk)
+        self._bl_optimizer = BlackLittermanOptimizer()
+        self._rp_allocator = RiskParityAllocator()
+        self._stress_tester = StressTester()
+        self._rebalancer = DynamicRebalancer()
+        self._decision = DecisionFusionAgent(
+            self._risk,
+            bl_optimizer=self._bl_optimizer,
+            rp_allocator=self._rp_allocator,
+            stress_tester=self._stress_tester,
+        )
 
-        # Execution layer (with virtual account integration)
+        # Execution layer (Phase 6: with smart timing, slippage model, order splitter)
+        self._slippage_model = SlippagePredictor(
+            max_acceptable_slippage_bps=config.MAX_SLIPPAGE_BPS,
+        )
+        self._smart_timing = SmartTiming(
+            avoid_open_minutes=config.AVOID_OPEN_MINUTES,
+            avoid_close_minutes=config.AVOID_CLOSE_MINUTES,
+        )
+        self._order_splitter = OrderSplitter(
+            split_threshold=config.ORDER_SPLIT_THRESHOLD,
+            max_slices=config.ORDER_SPLIT_MAX_SLICES,
+            twap_interval_seconds=config.TWAP_INTERVAL_SECONDS,
+        )
         self._executor = ExecutionAgent(
             self._client,
             self._compliance,
             virtual_account=self._virtual_account,
             account_manager=self._account_manager,
+            slippage_model=self._slippage_model,
+            smart_timing=self._smart_timing,
+            order_splitter=self._order_splitter,
         )
 
         # Audit
@@ -163,6 +223,11 @@ class TradingSystem:
         await self._finnhub.__aenter__()
         await self._intrinio.__aenter__()
         await self._yfinance.__aenter__()
+        # Phase 6: alternative data providers
+        await self._macro_provider.__aenter__()
+        await self._sec_edgar.__aenter__()
+        await self._options_flow_provider.__aenter__()
+        await self._social_provider.__aenter__()
         return self
 
     async def __aexit__(self, *exc: object) -> None:
@@ -173,6 +238,10 @@ class TradingSystem:
             self._finnhub.close(),
             self._intrinio.close(),
             self._yfinance.close(),
+            self._macro_provider.close(),
+            self._sec_edgar.close(),
+            self._options_flow_provider.close(),
+            self._social_provider.close(),
             return_exceptions=True,
         )
 
@@ -199,9 +268,16 @@ class TradingSystem:
             self._finnhub.health_check(),
             self._intrinio.health_check(),
             self._yfinance.health_check(),
+            self._macro_provider.health_check(),
+            self._sec_edgar.health_check(),
+            self._options_flow_provider.health_check(),
+            self._social_provider.health_check(),
             return_exceptions=True,
         )
-        providers = ["AlphaVantage", "Polygon", "Finnhub", "Intrinio", "YFinance"]
+        providers = [
+            "AlphaVantage", "Polygon", "Finnhub", "Intrinio", "YFinance",
+            "FRED (Macro)", "SEC EDGAR", "Options Flow", "Reddit (Social)",
+        ]
         for name, ok in zip(providers, health_checks):
             status = "OK" if ok is True else f"DEGRADED ({ok})"
             logger.info("Provider %s: %s", name, status)
@@ -219,6 +295,22 @@ class TradingSystem:
         if self._compliance.is_killed:
             logger.critical("Kill switch active — cycle aborted")
             return [{"error": "Kill switch active"}]
+
+        # ── 0. Rebalance check (Phase 7) ─────────────────────────────
+        # Check if current portfolio drifts from target allocation
+        # Target weights will be set by the optimizer in decide_batch()
+        if hasattr(self, '_target_weights') and self._target_weights:
+            current_weights: dict[str, float] = {}
+            v_nav = self._virtual_account.available_cash
+            for t, vpos in self._virtual_account.positions.items():
+                val = vpos.quantity * vpos.average_price
+                v_nav += val
+                current_weights[t] = val / v_nav if v_nav > 0 else 0.0
+            rebal = self._rebalancer.check_drift(current_weights, self._target_weights)
+            if rebal.needs_rebalance:
+                logger.info(
+                    "[%s] Rebalance triggered: %s", self._bot_id, rebal.summary,
+                )
 
         # ── 1. Fetch real portfolio state & build virtual view ────────
         account_info, portfolio_positions = await asyncio.gather(
@@ -543,3 +635,11 @@ class TradingSystem:
     @property
     def regime_detector(self) -> RegimeDetector:
         return self._regime_detector
+
+    @property
+    def stress_tester(self) -> StressTester:
+        return self._stress_tester
+
+    @property
+    def rebalancer(self) -> DynamicRebalancer:
+        return self._rebalancer

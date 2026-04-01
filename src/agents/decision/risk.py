@@ -44,9 +44,9 @@ _MIN_MEMORY_TRADES = 5         # 至少 5 筆交易才啟用記憶融合
 
 # ── 動態 Kelly 縮放常數 ──────────────────────────────────────────
 # Kelly 分數乘以一個 [KELLY_FLOOR, KELLY_CEIL] 之間的動態縮放係數
-_KELLY_FLOOR = 0.15            # 最保守：15% Kelly (低信心 + 高波動 + 回撤中)
-_KELLY_CEIL = 0.60             # 最激進：60% Kelly (高信心 + 低波動 + MTF共振)
-_KELLY_BASE = 0.40             # 基準：40% Kelly (標準條件)
+_KELLY_FLOOR = 0.25            # 最保守：25% Kelly (低信心 + 高波動 + 回撤中)
+_KELLY_CEIL = 0.80             # 最激進：80% Kelly (高信心 + 低波動 + MTF共振)
+_KELLY_BASE = 0.50             # 基準：50% Kelly (標準條件)
 
 # 回撤保護閾值
 _DRAWDOWN_MILD = 0.03          # 3% 回撤 → 開始減倉
@@ -84,6 +84,8 @@ class RiskEnvelope:
     var_95: float = 0.0          # 1-day 95% VaR (absolute)
     var_99: float = 0.0          # 1-day 99% VaR (absolute)
     expected_shortfall: float = 0.0
+    cvar_95: float = 0.0         # 95% Conditional VaR (absolute)
+    cvar_99: float = 0.0         # 99% Conditional VaR (absolute)
     risk_reward_ratio: float = 0.0
 
     # Kelly (Adaptive)
@@ -171,10 +173,12 @@ class RiskAgent:
             return envelope
 
         # ── 1. VaR computation ────────────────────────────────────────
-        var_95, var_99, es = self._compute_var(returns, current_price)
+        var_95, var_99, es, cvar_95, cvar_99 = self._compute_var(returns, current_price)
         envelope.var_95 = var_95
         envelope.var_99 = var_99
         envelope.expected_shortfall = es
+        envelope.cvar_95 = cvar_95
+        envelope.cvar_99 = cvar_99
 
         # ── 2. Portfolio exposure check ───────────────────────────────
         available_for_new = portfolio.total_nav * self._max_exposure - portfolio.invested_value
@@ -433,10 +437,10 @@ class RiskAgent:
         if atr_pct <= _VOL_LOW:
             vol_factor = 1.0      # 低波動 → 最大
         elif atr_pct >= _VOL_HIGH:
-            vol_factor = 0.0      # 高波動 → 最小
+            vol_factor = 0.3      # 高波動 → 保守但不歸零
         else:
-            # 線性插值
-            vol_factor = 1.0 - (atr_pct - _VOL_LOW) / (_VOL_HIGH - _VOL_LOW)
+            # 線性插值，下限 0.3
+            vol_factor = max(0.3, 1.0 - (atr_pct - _VOL_LOW) / (_VOL_HIGH - _VOL_LOW))
 
         # ── 3. 回撤保護因子 ──────────────────────────────────
         drawdown_factor = 1.0
@@ -464,12 +468,12 @@ class RiskAgent:
                 # 牛市 → 允許更大倉位，按信心度加權
                 regime_factor = 0.7 + 0.3 * regime.confidence
             elif regime.regime == MarketRegime.BEAR:
-                # 熊市 → 大幅縮減倉位
-                regime_factor = 0.3 - 0.2 * regime.confidence
-                regime_factor = max(regime_factor, 0.0)
+                # 熊市 → 縮減倉位但保留交易能力
+                regime_factor = 0.3 - 0.1 * regime.confidence
+                regime_factor = max(regime_factor, 0.15)
             else:
-                # SIDEWAYS → 中等，略偏保守
-                regime_factor = 0.4
+                # SIDEWAYS → 中等
+                regime_factor = 0.55
 
         # ── 加權融合 ──────────────────────────────────────────
         # 信心(35%) + 波動(20%) + 回撤(20%) + 共振(10%) + 體制(15%)
@@ -601,16 +605,16 @@ class RiskAgent:
 
     def _compute_var(
         self, returns: np.ndarray, price: float,
-    ) -> tuple[float, float, float]:
+    ) -> tuple[float, float, float, float, float]:
         """
-        Returns (VaR_95, VaR_99, Expected_Shortfall) as absolute values
-        for a 1-unit position at `price`.
+        Returns (VaR_95, VaR_99, Expected_Shortfall, CVaR_95, CVaR_99)
+        as absolute values for a 1-unit position at `price`.
         """
         mu = np.mean(returns)
         sigma = np.std(returns, ddof=1)
 
         if sigma == 0:
-            return 0.0, 0.0, 0.0
+            return 0.0, 0.0, 0.0, 0.0, 0.0
 
         # Parametric VaR (normal assumption)
         z_95 = 1.645
@@ -626,13 +630,18 @@ class RiskAgent:
         mc_var_95 = mc_losses_sorted[int(0.95 * self._mc_sims)]
 
         # Expected Shortfall (CVaR): average of losses beyond VaR
-        tail_losses = mc_losses_sorted[int(0.95 * self._mc_sims):]
-        es = float(np.mean(tail_losses)) if len(tail_losses) > 0 else var_95
+        tail_losses_95 = mc_losses_sorted[int(0.95 * self._mc_sims):]
+        es = float(np.mean(tail_losses_95)) if len(tail_losses_95) > 0 else var_95
+
+        # CVaR at 95% and 99% (tail risk beyond VaR)
+        cvar_95 = es  # CVaR_95 = ES at 95%
+        tail_losses_99 = mc_losses_sorted[int(0.99 * self._mc_sims):]
+        cvar_99 = float(np.mean(tail_losses_99)) if len(tail_losses_99) > 0 else var_99
 
         # Use conservative estimate (max of parametric & MC)
         final_var_95 = max(var_95, mc_var_95)
 
-        return abs(final_var_95), abs(var_99), abs(es)
+        return abs(final_var_95), abs(var_99), abs(es), abs(cvar_95), abs(cvar_99)
 
     def _kelly_fraction(
         self, returns: np.ndarray, confidence: float, direction: int,

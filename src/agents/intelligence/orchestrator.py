@@ -96,7 +96,7 @@ _DEFAULT_WEIGHTS = {
 }
 
 # ── 分歧懲罰參數 ──────────────────────────────────────────────
-_DIVERGENCE_PENALTY = 0.15   # 偵測到多空分歧時，扣減 15% 信心分數
+_DIVERGENCE_PENALTY = 0.05   # 偵測到多空分歧時，扣減 5% 信心分數
 
 
 class IntelligenceOrchestrator:

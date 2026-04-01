@@ -20,6 +20,9 @@ from typing import Any
 
 from src.agents.decision.decision_fusion import TradeAction, TradeProposal
 from src.agents.decision.risk import PortfolioRiskState
+from src.agents.execution.slippage_model import SlippagePredictor
+from src.agents.execution.timing import SmartTiming
+from src.agents.execution.order_splitter import OrderSplitter
 from src.compliance.guard import ComplianceGuard, VetoResult
 from src.core.client import Trading212Client, Trading212APIError
 from src.core.virtual_account import VirtualSubAccount, VirtualAccountManager
@@ -31,6 +34,7 @@ class OrderStatus(Enum):
     PENDING_VALIDATION = auto()
     VALIDATED = auto()
     COMPLIANCE_VETOED = auto()
+    TIMING_DELAYED = auto()
     SUBMITTED = auto()
     FILLED = auto()
     PARTIALLY_FILLED = auto()
@@ -61,6 +65,7 @@ class OrderTicket:
     fill_price: float | None = None
     fill_quantity: float | None = None
     slippage: float = 0.0          # fill_price - expected_price
+    slippage_prediction: Any = None  # SlippagePrediction from pre-trade model
 
     # Timestamps
     created_at: float = field(default_factory=time.time)
@@ -72,6 +77,11 @@ class ExecutionAgent:
     """
     Converts trade proposals into live API orders with full pre-flight
     validation and compliance gating.
+
+    Phase 6 enhancements:
+      - SlippagePredictor: 預測滑點，過大時縮減數量
+      - SmartTiming: 避開高波動時段
+      - OrderSplitter: TWAP/VWAP 大單拆分
     """
 
     def __init__(
@@ -80,11 +90,17 @@ class ExecutionAgent:
         compliance: ComplianceGuard,
         virtual_account: VirtualSubAccount | None = None,
         account_manager: VirtualAccountManager | None = None,
+        slippage_model: "SlippagePredictor | None" = None,
+        smart_timing: "SmartTiming | None" = None,
+        order_splitter: "OrderSplitter | None" = None,
     ) -> None:
         self._client = client
         self._compliance = compliance
         self._virtual_account = virtual_account
         self._account_manager = account_manager
+        self._slippage = slippage_model
+        self._timing = smart_timing
+        self._splitter = order_splitter
         self._order_counter = 0
         self._active_tickets: dict[str, OrderTicket] = {}
 
@@ -123,6 +139,49 @@ class ExecutionAgent:
             return ticket
 
         ticket.status = OrderStatus.VALIDATED
+
+        # ── Step 1b: Smart Timing check ──────────────────────────────
+        if self._timing is not None:
+            market = "UK" if is_uk_equity else "US"
+            timing = self._timing.evaluate(
+                ticker=proposal.ticker,
+                market=market,
+            )
+            if not timing.should_execute_now:
+                ticket.status = OrderStatus.TIMING_DELAYED
+                ticket.validation_errors.append(
+                    f"Timing delay: {timing.reason} "
+                    f"(suggested wait: {timing.suggested_delay_seconds:.0f}s)"
+                )
+                logger.info(
+                    "Ticket %s DELAYED by timing: %s",
+                    ticket.ticket_id, timing.reason,
+                )
+                self._active_tickets[ticket.ticket_id] = ticket
+                return ticket
+
+        # ── Step 1c: Slippage prediction ─────────────────────────────
+        if self._slippage is not None:
+            prediction = self._slippage.predict(
+                order_value=proposal.estimated_value,
+                avg_daily_volume=proposal.estimated_value * 100,  # rough estimate
+                current_price=proposal.current_price,
+            )
+            ticket.slippage_prediction = prediction
+
+            if self._slippage.should_reduce_size(prediction):
+                adjusted_qty = self._slippage.adjusted_quantity(
+                    proposal.quantity, prediction,
+                )
+                logger.info(
+                    "Ticket %s: slippage %.1f bps > max — qty adjusted %.2f → %.2f",
+                    ticket.ticket_id,
+                    prediction.expected_slippage_bps,
+                    proposal.quantity,
+                    adjusted_qty,
+                )
+                proposal.quantity = adjusted_qty
+                proposal.estimated_value = adjusted_qty * proposal.current_price
 
         # ── Step 2: Compliance gate (absolute veto) ───────────────────
         # 新版：使用 pre_trade_check 整合虛擬帳戶驗證
@@ -237,6 +296,20 @@ class ExecutionAgent:
                             ticket.slippage = (
                                 ticket.fill_price - ticket.proposal.current_price
                             )
+
+                            # Record observation for slippage model learning
+                            if self._slippage is not None and ticket.slippage_prediction is not None:
+                                actual_bps = (
+                                    abs(ticket.slippage) / ticket.proposal.current_price
+                                ) * 10_000
+                                self._slippage.record_observation(
+                                    predicted_bps=ticket.slippage_prediction.expected_slippage_bps,
+                                    actual_slippage_bps=actual_bps,
+                                    order_details={
+                                        "ticker": ticket.proposal.ticker,
+                                        "ticket_id": ticket.ticket_id,
+                                    },
+                                )
 
                         # ── Virtual account bookkeeping ──────
                         if self._virtual_account is not None and ticket.fill_price:
