@@ -164,6 +164,10 @@ async def main() -> None:
             env_name, bot_id, initial_capital, len(target_isins),
         )
 
+        # Separate target lists by market (needed for startup msg + schedulers)
+        us_isins = [i for i in target_isins if i.startswith("US")]
+        uk_isins = [i for i in target_isins if not i.startswith("US")]
+
         # Notify system startup
         startup_msg = (
             f"Env: {env_name} | Bot: {bot_id}\n"
@@ -281,10 +285,6 @@ async def main() -> None:
 
             except Exception:
                 logger.exception("Learning report generation failed")
-
-        # ── Separate target lists by market ───────────────────────────
-        us_isins = [i for i in target_isins if i.startswith("US")]
-        uk_isins = [i for i in target_isins if not i.startswith("US")]
 
         async def uk_trading_job() -> None:
             """UK market scan — runs during LSE hours."""
