@@ -563,9 +563,9 @@ class DecadeBacktester:
     # Technical gets 80% because it's the only agent with real historical data;
     # fundamental has static mock data, sentiment has empty mock data.
     _BACKTEST_WEIGHTS: dict[str, float] = {
-        "fundamental": 0.10,
-        "technical": 0.80,
-        "sentiment": 0.10,
+        "fundamental": 0.05,
+        "technical": 0.90,
+        "sentiment": 0.05,
     }
 
     def __init__(
@@ -574,10 +574,10 @@ class DecadeBacktester:
         start_date: str = "2014-01-01",
         end_date: str = "2024-01-01",
         initial_capital: float = 10_000.0,
-        scan_interval: int = 5,
+        scan_interval: int = 2,
         reflection_interval: int = 20,
-        min_entry_score: float = 0.05,
-        confidence_floor: float = 0.60,
+        min_entry_score: float = 0.03,
+        confidence_floor: float = 0.75,
         data_dir: str = "data/backtest",
     ) -> None:
         self.tickers = tickers
@@ -688,11 +688,12 @@ class DecadeBacktester:
         )
 
         # Risk agent (with memory for regime-aware Kelly)
-        # Backtest uses looser risk limits: 5% per trade, 10% daily VaR cap
-        # (production defaults: 5% position, 2% VaR)
+        # Backtest uses aggressive limits to stay fully invested:
+        # 25% per trade allows 4 concurrent positions at full allocation
         risk = RiskAgent(
-            max_single_position_pct=0.05,
-            max_var_pct_of_nav=0.10,
+            max_single_position_pct=0.25,
+            max_var_pct_of_nav=0.20,
+            atr_tp_multiplier=4.5,
             episodic_memory=memory,
         )
 
@@ -1314,20 +1315,20 @@ def _parse_args() -> argparse.Namespace:
         help="Initial capital in GBP (default: 10000)",
     )
     parser.add_argument(
-        "--scan-interval", type=int, default=5,
-        help="Scan every N trading days (default: 5)",
+        "--scan-interval", type=int, default=2,
+        help="Scan every N trading days (default: 2)",
     )
     parser.add_argument(
         "--reflection-interval", type=int, default=20,
         help="Run OPRO reflection every N days (default: 20)",
     )
     parser.add_argument(
-        "--min-score", type=float, default=0.05,
-        help="Minimum fused_score to open a trade (default: 0.05)",
+        "--min-score", type=float, default=0.03,
+        help="Minimum fused_score to open a trade (default: 0.03)",
     )
     parser.add_argument(
-        "--confidence-floor", type=float, default=0.60,
-        help="Confidence floor for Kelly formula in backtest (default: 0.60)",
+        "--confidence-floor", type=float, default=0.75,
+        help="Confidence floor for Kelly formula in backtest (default: 0.75)",
     )
     parser.add_argument(
         "--data-dir", default="data/backtest",
