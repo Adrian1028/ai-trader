@@ -85,14 +85,18 @@ class MarketView:
 # ── 預設融合權重 ──────────────────────────────────────────────
 # 後續可由 Adaptive-OPRO 動態調整，適應不同市場體制
 _DEFAULT_WEIGHTS = {
-    "fundamental": 0.30,   # 長期內在價值
-    "technical": 0.30,     # 短期價格趨勢與動能
-    "sentiment": 0.20,     # 市場情緒與新聞解讀
-    "gemini_strategist": 0.20,  # LLM 語義推理（跨因子綜合判斷）
+    "fundamental": 0.20,           # 長期內在價值
+    "technical": 0.20,             # 短期價格趨勢與動能
+    "sentiment": 0.15,             # 市場情緒與新聞解讀
+    "gemini_strategist": 0.15,     # LLM 語義推理（跨因子綜合判斷）
+    "macro": 0.10,                 # 宏觀經濟環境（Phase 6）
+    "options_flow": 0.08,          # 期權異常流量（Phase 6）
+    "insider": 0.05,               # 內部人交易信號（Phase 6）
+    "social_sentiment": 0.07,      # 社群情緒動量（Phase 6）
 }
 
 # ── 分歧懲罰參數 ──────────────────────────────────────────────
-_DIVERGENCE_PENALTY = 0.30   # 偵測到多空分歧時，扣減 30% 信心分數
+_DIVERGENCE_PENALTY = 0.15   # 偵測到多空分歧時，扣減 15% 信心分數
 
 
 class IntelligenceOrchestrator:
