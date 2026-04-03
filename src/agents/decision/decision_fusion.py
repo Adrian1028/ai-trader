@@ -355,7 +355,7 @@ class DecisionFusionAgent:
         market_weights = np.full(n, 1.0 / n)  # equal weight as prior
 
         # Choose optimizer: BL if good confidence, Risk Parity as fallback
-        if avg_confidence >= 0.4:
+        if avg_confidence >= 0.2:
             optimal_weights = self._bl.optimize(
                 market_weights=market_weights,
                 cov_matrix=cov_matrix,

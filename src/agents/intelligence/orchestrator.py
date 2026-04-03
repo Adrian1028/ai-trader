@@ -278,8 +278,8 @@ class IntelligenceOrchestrator:
             direction_spread = max(directions) - min(directions)
             # spread=0 → 完全一致, spread=4 → 強買vs強賣（最大分歧）
 
-            if direction_spread >= 2:
-                # 存在多空分歧（至少一個 BUY 和一個 SELL）
+            if direction_spread >= 3:
+                # 存在嚴重多空分歧（例如 STRONG_BUY vs SELL）
                 divergence_detected = True
 
             # 連續性衰減：spread 越大 → agreement_factor 越小
@@ -288,7 +288,7 @@ class IntelligenceOrchestrator:
                 1.0 - direction_spread / 4.0,
             )
         else:
-            agreement_factor = 0.5
+            agreement_factor = 0.8  # 沒方向信號時不要懲罰太多
 
         fused_confidence = min(avg_confidence * agreement_factor, 1.0)
 

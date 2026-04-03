@@ -122,7 +122,10 @@ class FundamentalAgent(BaseAgent):
         composite_score = max(-100.0, min(100.0, composite_score))
 
         direction = self._score_to_direction(composite_score)
-        confidence = min(abs(composite_score) / 80.0, 1.0)
+        confidence = min(abs(composite_score) / 30.0, 1.0)
+        # Floor: if we got data and computed a score, confidence >= 0.20
+        if abs(composite_score) > 1.0:
+            confidence = max(confidence, 0.20)
 
         if not reasons:
             reasons.append("Insufficient fundamental data for scoring")
@@ -489,12 +492,12 @@ class FundamentalAgent(BaseAgent):
     @staticmethod
     def _score_to_direction(score: float) -> SignalDirection:
         """將數值分數映射到信號方向。"""
-        if score >= 40:
+        if score >= 25:
             return SignalDirection.STRONG_BUY
-        if score >= 15:
+        if score >= 5:
             return SignalDirection.BUY
-        if score <= -40:
+        if score <= -25:
             return SignalDirection.STRONG_SELL
-        if score <= -15:
+        if score <= -5:
             return SignalDirection.SELL
         return SignalDirection.NEUTRAL

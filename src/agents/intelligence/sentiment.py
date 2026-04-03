@@ -120,7 +120,10 @@ class SentimentAgent(BaseAgent):
             reasons.append("Insufficient sentiment data")
 
         direction = self._score_to_direction(composite_score)
-        confidence = min(abs(composite_score) / 70.0, 1.0)
+        confidence = min(abs(composite_score) / 30.0, 1.0)
+        # Floor: if we got data and computed a score, confidence >= 0.20
+        if abs(composite_score) > 1.0:
+            confidence = max(confidence, 0.20)
 
         logger.info(
             "[SentimentAgent] %s 分析完成: 訊號=%s, 信心度=%.2f, "
@@ -448,12 +451,12 @@ class SentimentAgent(BaseAgent):
     @staticmethod
     def _score_to_direction(score: float) -> SignalDirection:
         """將數值分數映射到信號方向。"""
-        if score >= 30:
+        if score >= 20:
             return SignalDirection.STRONG_BUY
-        if score >= 10:
+        if score >= 5:
             return SignalDirection.BUY
-        if score <= -30:
+        if score <= -20:
             return SignalDirection.STRONG_SELL
-        if score <= -10:
+        if score <= -5:
             return SignalDirection.SELL
         return SignalDirection.NEUTRAL
