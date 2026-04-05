@@ -186,8 +186,9 @@ now_utc = datetime.now(timezone.utc)
 hour_utc = now_utc.hour
 minute_utc = now_utc.minute
 
-uk_open = 8 <= hour_utc < 16 or (hour_utc == 16 and minute_utc <= 30)
-us_open = 13 <= hour_utc < 20 or (hour_utc == 13 and minute_utc >= 30)
+is_weekday = now_utc.weekday() < 5  # Mon=0 .. Fri=4
+uk_open = is_weekday and (8 <= hour_utc < 16 or (hour_utc == 16 and minute_utc <= 30))
+us_open = is_weekday and (13 <= hour_utc < 20 or (hour_utc == 13 and minute_utc >= 30))
 
 ms1, ms2, ms3 = st.columns(3)
 ms1.metric("🕐 UTC Time", now_utc.strftime("%H:%M:%S"))
