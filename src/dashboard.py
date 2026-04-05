@@ -608,8 +608,12 @@ st.divider()
 st.header("\U0001f52c Backtest Engine")
 st.caption("Test the AI trading strategy against historical data with S&P 500 benchmark comparison.")
 
-from src.backtest_dashboard import render_backtest_page
-render_backtest_page()
+try:
+    from src.backtest_dashboard import render_backtest_page
+    render_backtest_page()
+except ImportError:
+    from backtest_dashboard import render_backtest_page
+    render_backtest_page()
 
 # ── Footer ─────────────────────────────────────────────────────────
 st.divider()
