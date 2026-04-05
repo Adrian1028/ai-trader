@@ -1,0 +1,73 @@
+{
+  "results": [
+    {
+      "version": "A",
+      "description": "T+0 Close (unrealistic baseline)",
+      "total_return_pct": 7.5777898273618804,
+      "annualised_return_pct": 2.4812954628945283,
+      "sharpe": 0.3432457293945213,
+      "max_dd_pct": 11.428749439792242,
+      "year_2022_return_pct": -7.097966217782103,
+      "spy_total_return_pct": 28.66221575602863,
+      "spy_sharpe": 0.5703945959842857,
+      "spy_max_dd_pct": 24.496380915025384,
+      "spy_2022_return_pct": -18.646407230964492,
+      "excess_return_pct": -21.08442592866675,
+      "n_trades": 22
+    },
+    {
+      "version": "B",
+      "description": "T+1 Open (+0.05% slip)",
+      "total_return_pct": 8.36922402785245,
+      "annualised_return_pct": 2.733666179431915,
+      "sharpe": 0.37243752210836273,
+      "max_dd_pct": 11.45610831592454,
+      "year_2022_return_pct": -6.53220353922912,
+      "spy_total_return_pct": 28.66221575602863,
+      "spy_sharpe": 0.5703945959842857,
+      "spy_max_dd_pct": 24.496380915025384,
+      "spy_2022_return_pct": -18.646407230964492,
+      "excess_return_pct": -20.29299172817618,
+      "n_trades": 22
+    },
+    {
+      "version": "C",
+      "description": "T+1 VWAP (+0.10% slip)",
+      "total_return_pct": 8.528799053610147,
+      "annualised_return_pct": 2.784402622022375,
+      "sharpe": 0.37920723228487124,
+      "max_dd_pct": 11.433202790189279,
+      "year_2022_return_pct": -6.104912746023794,
+      "spy_total_return_pct": 28.66221575602863,
+      "spy_sharpe": 0.5703945959842857,
+      "spy_max_dd_pct": 24.496380915025384,
+      "spy_2022_return_pct": -18.646407230964492,
+      "excess_return_pct": -20.133416702418483,
+      "n_trades": 22
+    }
+  ],
+  "full_period_b": {
+    "version": "B",
+    "description": "T+1 Open (+0.05% slip)",
+    "total_return_pct": 39.308626762581596,
+    "annualised_return_pct": 2.2395411056017167,
+    "sharpe": 0.4069671201388738,
+    "max_dd_pct": 14.132196399565233,
+    "year_2022_return_pct": -9.434455488947046,
+    "spy_total_return_pct": 583.7663214608108,
+    "spy_sharpe": 0.8389246770225762,
+    "spy_max_dd_pct": 33.717259886422944,
+    "spy_2022_return_pct": -18.1753760290865,
+    "excess_return_pct": -544.4576946982291,
+    "n_trades": 109
+  },
+  "sharpe_decay_b_pct": -8.504633914990048,
+  "sharpe_decay_c_pct": -10.476897397612293,
+  "gates": {
+    "Sharpe > 0.70": false,
+    "2022 Return > SPY 2022": true,
+    "Max DD < 70% of SPY DD": true,
+    "Ann Return > SPY Ann Return": "False"
+  },
+  "all_gates_passed": false
+}

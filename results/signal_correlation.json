@@ -1,0 +1,14 @@
+{
+  "correlations": {
+    "vix_ratio_vs_crowding": 0.09117622935722519,
+    "oas_vs_crowding": 0.11358096631364949
+  },
+  "overlap": {
+    "macro_caution_days": 341,
+    "high_exclusion_days": 0,
+    "overlap_days": 0,
+    "overlap_pct": 0.0
+  },
+  "is_redundant": false,
+  "recommendation": "KEEP_BOTH"
+}

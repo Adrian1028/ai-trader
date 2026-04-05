@@ -1,0 +1,30 @@
+{
+  "strategy_a": {
+    "total_return_pct": 19.576628130302943,
+    "sharpe": 0.6616412868913272,
+    "max_dd_pct": 12.645947243998034,
+    "trade_count": 640,
+    "year_2022_return": -7.50903893566639
+  },
+  "strategy_b": {
+    "total_return_pct": 19.576628130302943,
+    "sharpe": 0.6616412868913272,
+    "max_dd_pct": 12.645947243998034,
+    "trade_count": 640,
+    "year_2022_return": -7.50903893566639
+  },
+  "benchmark": {
+    "total_return_pct": 28.66221575602863,
+    "sharpe": 0.5703944721765309,
+    "max_dd_pct": 24.496394458998193
+  },
+  "insider_delta_sharpe": 0.0,
+  "best_strategy": "A",
+  "gates": {
+    "Strategy A Sharpe > 0.8": false,
+    "Strategy A beats SPY return": "False",
+    "Strategy A Max DD < 30%": true,
+    "Strategy A beats SPY in 2022": true
+  },
+  "all_gates_passed": false
+}

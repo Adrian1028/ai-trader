@@ -1,0 +1,33 @@
+{
+  "baseline_metrics": {
+    "total_return_pct": 12.940208226369876,
+    "benchmark_return_pct": 28.66220316104071,
+    "sharpe": 0.4056357214246705,
+    "benchmark_sharpe": 0.5703943612428906,
+    "max_dd_pct": 18.255420502736285,
+    "benchmark_max_dd_pct": 24.496409798276787,
+    "year_2022_return": -15.82169472166396
+  },
+  "filtered_metrics": {
+    "total_return_pct": 12.004831330037135,
+    "benchmark_return_pct": 28.66220316104071,
+    "sharpe": 0.3791289976708214,
+    "benchmark_sharpe": 0.5703943612428906,
+    "max_dd_pct": 19.021324634215432,
+    "benchmark_max_dd_pct": 24.496409798276787,
+    "year_2022_return": -17.58622798476036
+  },
+  "forward_return_analysis": {
+    "excluded_avg_30d_return": 0.014107614132900565,
+    "retained_avg_30d_return": 0.011810229201388175,
+    "n_excluded_samples": 88,
+    "n_retained_samples": 632
+  },
+  "gates": {
+    "Filter DD < Baseline DD": false,
+    "Filter Sharpe > Baseline Sharpe": false,
+    "Filter 2022 > Baseline 2022": false,
+    "Excluded avg 30d return < Retained": "False"
+  },
+  "all_gates_passed": false
+}

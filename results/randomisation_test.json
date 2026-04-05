@@ -1,0 +1,9 @@
+{
+  "actual_sharpe": 1.7794049678498447,
+  "random_sharpe_mean": 2.12183562258007,
+  "random_sharpe_std": 0.2850657112015244,
+  "random_sharpe_p95": 2.606362439682977,
+  "p_value": 0.888,
+  "n_shuffles": 1000,
+  "significant": false
+}

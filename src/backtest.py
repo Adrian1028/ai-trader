@@ -577,7 +577,7 @@ class DecadeBacktester:
         scan_interval: int = 2,
         reflection_interval: int = 20,
         min_entry_score: float = 0.03,
-        confidence_floor: float = 0.75,
+        confidence_floor: float = 0.70,
         data_dir: str = "data/backtest",
     ) -> None:
         self.tickers = tickers
@@ -688,12 +688,11 @@ class DecadeBacktester:
         )
 
         # Risk agent (with memory for regime-aware Kelly)
-        # Backtest uses aggressive limits to stay fully invested:
-        # 25% per trade allows 4 concurrent positions at full allocation
+        # 25% per trade allows ~4 concurrent positions at full allocation
         risk = RiskAgent(
             max_single_position_pct=0.25,
             max_var_pct_of_nav=0.20,
-            atr_tp_multiplier=4.5,
+            atr_tp_multiplier=5.0,
             episodic_memory=memory,
         )
 
@@ -701,13 +700,19 @@ class DecadeBacktester:
         attribution_engine = FailureAttributionEngine(memory)
 
         # ── 3. State tracking ──────────────────────────────────────
-        # Active trades: {ticker: {entry_price, sl, tp, qty, signal, isin}}
+        # Active trades: {ticker: {entry_price, sl, tp, qty, direction, max_price, isin}}
         active_trades: dict[str, dict[str, Any]] = {}
         daily_nav: list[dict[str, Any]] = []
         trade_count = 0
         win_count = 0
         loss_count = 0
         last_log_year = 0
+
+        # ── Drawdown protection state ────────────────────────────
+        peak_nav = self.initial_capital
+        _DRAWDOWN_SCALE_START = 0.08   # start scaling down at -8%
+        _DRAWDOWN_SCALE_SEVERE = 0.18  # half size at -18%
+        _TRAILING_STOP_PCT = 0.25      # trail SL at 25% of unrealised gain (let winners run)
 
         # 大腦神經可視化: track TechnicalAgent internal weight evolution
         weight_evolution_history: list[dict[str, Any]] = []
@@ -723,7 +728,7 @@ class DecadeBacktester:
             date_str = current_dt.strftime("%Y-%m-%d")
 
             # =========================================================
-            # Phase 1: 平倉邏輯 — Check SL/TP against today's High/Low
+            # Phase 1: 平倉邏輯 — SL/TP + Trailing Stop
             # =========================================================
             tickers_to_close: list[str] = []
             for ticker, trade in active_trades.items():
@@ -735,50 +740,75 @@ class DecadeBacktester:
                 today_high = float(today["High"])
                 today_low = float(today["Low"])
                 today_close = float(today["Close"])
+                direction = trade.get("direction", 1)
 
                 exit_price: float | None = None
 
-                # Pessimistic fill: check stop-loss first (worst case)
-                if today_low <= trade["sl"]:
-                    exit_price = trade["sl"]
-                elif today_high >= trade["tp"]:
-                    exit_price = trade["tp"]
+                if direction > 0:
+                    # ── LONG exit logic ──────────────────────────
+                    # Trailing stop: ratchet SL upward as price rises
+                    if today_high > trade.get("max_price", trade["entry_price"]):
+                        trade["max_price"] = today_high
+                        gain = today_high - trade["entry_price"]
+                        trailing_sl = trade["entry_price"] + gain * _TRAILING_STOP_PCT
+                        if trailing_sl > trade["sl"]:
+                            trade["sl"] = trailing_sl
+
+                    if today_low <= trade["sl"]:
+                        exit_price = trade["sl"]
+                    elif today_high >= trade["tp"]:
+                        exit_price = trade["tp"]
+                else:
+                    # ── SHORT exit logic ─────────────────────────
+                    # Trailing stop: ratchet SL downward as price falls
+                    if today_low < trade.get("min_price", trade["entry_price"]):
+                        trade["min_price"] = today_low
+                        gain = trade["entry_price"] - today_low
+                        trailing_sl = trade["entry_price"] - gain * _TRAILING_STOP_PCT
+                        if trailing_sl < trade["sl"]:
+                            trade["sl"] = trailing_sl
+
+                    if today_high >= trade["sl"]:
+                        exit_price = trade["sl"]
+                    elif today_low <= trade["tp"]:
+                        exit_price = trade["tp"]
 
                 if exit_price is not None:
                     # Record exit in virtual account
-                    virtual_account.record_trade(
-                        ticker, -trade["qty"], exit_price,
-                    )
-                    roi = (exit_price - trade["entry_price"]) / trade["entry_price"]
-                    trade_count += 1
+                    close_qty = -trade["qty"] if direction > 0 else abs(trade["qty"])
+                    virtual_account.record_trade(ticker, close_qty, exit_price)
 
+                    if direction > 0:
+                        roi = (exit_price - trade["entry_price"]) / trade["entry_price"]
+                        pnl = (exit_price - trade["entry_price"]) * trade["qty"]
+                    else:
+                        roi = (trade["entry_price"] - exit_price) / trade["entry_price"]
+                        pnl = (trade["entry_price"] - exit_price) * abs(trade["qty"])
+
+                    trade_count += 1
                     episode_id = f"BT_{date_str}_{ticker}"
+                    action = "BUY" if direction > 0 else "SHORT"
 
                     if roi < 0:
-                        # 虧損 → trigger FailureAttributionEngine
                         loss_count += 1
-
-                        # Store episode first so attribution can writeback
                         episode = Episode(
                             episode_id=episode_id,
                             timestamp=current_dt.timestamp(),
                             ticker=ticker,
                             isin=trade.get("isin", ""),
-                            action="BUY",
+                            action=action,
                             roi=roi,
-                            pnl=(exit_price - trade["entry_price"]) * trade["qty"],
+                            pnl=pnl,
                             fused_score=trade.get("fused_score", 0.0),
                             fused_confidence=trade.get("fused_confidence", 0.0),
                             agent_scores=trade.get("agent_scores", {}),
                         )
                         memory.store(episode)
-
-                        # Run failure attribution diagnosis
                         try:
                             attribution_engine.diagnose_and_update(
                                 episode_id=episode_id,
                                 expected_price=trade["entry_price"],
-                                fill_price=trade["entry_price"],  # backtest = no slippage
+                                fill_price=trade["entry_price"],
                                 close_price=exit_price,
                                 roi=roi,
                                 agent_confidences=trade.get("agent_scores", {}),
@@ -789,34 +819,54 @@ class DecadeBacktester:
                                 exc_info=True,
                             )
                     else:
-                        # 獲利 → store success episode
                         win_count += 1
                         episode = Episode(
                             episode_id=episode_id,
                             timestamp=current_dt.timestamp(),
                             ticker=ticker,
                             isin=trade.get("isin", ""),
-                            action="BUY",
+                            action=action,
                             roi=roi,
-                            pnl=(exit_price - trade["entry_price"]) * trade["qty"],
+                            pnl=pnl,
                             fused_score=trade.get("fused_score", 0.0),
                             fused_confidence=trade.get("fused_confidence", 0.0),
                             agent_scores=trade.get("agent_scores", {}),
                         )
                         memory.store(episode)
 
-                    # Record trade outcome for OPRO bandit evolution
                     opro.record_trade_outcome(roi)
-
                     tickers_to_close.append(ticker)
 
             for t in tickers_to_close:
                 del active_trades[t]
 
             # =========================================================
-            # Phase 2: 大腦掃描 — Entry logic for tickers without position
+            # Phase 2: 大腦掃描 — Entry logic (LONG + SHORT)
             # =========================================================
             if day_idx % self._scan_interval == 0:
+                # ── Drawdown protection: scale position sizes ────
+                current_nav = virtual_account.available_cash
+                for _tk, _tr in active_trades.items():
+                    _px = self._feeder.get_current_price(_tk)
+                    if _px:
+                        d = _tr.get("direction", 1)
+                        if d > 0:
+                            current_nav += _tr["qty"] * _px
+                        else:
+                            current_nav += abs(_tr["qty"]) * (2 * _tr["entry_price"] - _px)
+
+                if current_nav > peak_nav:
+                    peak_nav = current_nav
+                drawdown_pct = (peak_nav - current_nav) / peak_nav if peak_nav > 0 else 0.0
+
+                if drawdown_pct >= _DRAWDOWN_SCALE_SEVERE:
+                    dd_scale = 0.50  # half size
+                elif drawdown_pct >= _DRAWDOWN_SCALE_START:
+                    t = (drawdown_pct - _DRAWDOWN_SCALE_START) / (_DRAWDOWN_SCALE_SEVERE - _DRAWDOWN_SCALE_START)
+                    dd_scale = 1.0 - 0.50 * t
+                else:
+                    dd_scale = 1.0
+
                 for ticker in self.tickers:
                     if ticker in active_trades:
                         continue
@@ -825,39 +875,34 @@ class DecadeBacktester:
 
                     past_df = self._feeder.get_past_df(ticker)
                     if len(past_df) < 30:
-                        # Need minimum history for indicators
                         continue
 
                     today_close = float(past_df.iloc[-1]["Close"])
                     isin = self._feeder._data[ticker].isin
 
                     try:
-                        # 1. Intelligence fusion (Orchestrator)
+                        # 1. Intelligence fusion
                         view = await intelligence.evaluate(
                             {"ticker": ticker, "isin": isin},
                         )
 
-                        # Entry gate: use fused_score threshold instead of
-                        # SignalDirection enum.  With mock fundamental/sentiment
-                        # data the fused_score rarely reaches the hardcoded 0.4
-                        # BUY threshold, so we use a configurable min_entry_score
-                        # (default 0.05) to allow trades on weaker-but-positive
-                        # technical signals.
-                        if view.fused_score < self._min_entry_score:
-                            continue
+                        # Determine direction: LONG or SHORT
+                        # Shorts disabled in backtest (mock data makes sell
+                        # signals unreliable). Short logic is kept in Phase 1
+                        # exit for production use.
+                        score = view.fused_score
+                        if score >= self._min_entry_score:
+                            direction = 1   # LONG
+                        else:
+                            continue  # no short in backtest
 
-                        # Confidence amplifier — "Adrenaline Shot"
-                        # When the orchestrator produces a non-NEUTRAL signal,
-                        # the backtest amplifies fused_confidence to compensate
-                        # for the structurally low mock-data confidence.  This
-                        # works in tandem with confidence_floor but targets the
-                        # signal itself rather than the Kelly floor.
+                        # Confidence amplifier for non-NEUTRAL signals
                         if view.fused_direction != SignalDirection.NEUTRAL:
                             view.fused_confidence = max(
                                 0.85, view.fused_confidence * 3,
                             )
 
-                        # 2. Prepare price data for RiskAgent
+                        # 2. Prepare price data
                         bars = self._feeder.get_daily_bars(ticker, 365)
                         if len(bars) < 15:
                             continue
@@ -869,33 +914,18 @@ class DecadeBacktester:
                         returns = np.diff(np.log(closes)) if len(closes) > 1 else np.array([0.0])
                         atr = TechnicalAgent._compute_atr(highs, lows, closes, 14)
 
-                        # 3. RiskAgent evaluation (half-Kelly + VaR)
-                        #
-                        # Confidence floor for backtest mode:
-                        # In production, fused_confidence reflects real
-                        # API data quality.  In backtest, mock sentiment
-                        # (conf=0.00) and mock fundamental (conf=0.15)
-                        # permanently suppress it to ~0.12, which makes
-                        # Kelly's  p = 0.5*base_p + 0.5*0.12 ~ 0.32
-                        # — always below the Kelly > 0 threshold (0.50).
-                        #
-                        # The confidence_floor (default 0.60) corrects
-                        # this structural bias.  It represents: "given
-                        # that the fused_score already passed our entry
-                        # gate, we are at least this confident."
-                        #
-                        # Math with floor=0.60, base_p=0.52, b=1.0:
-                        #   p = 0.5*0.52 + 0.5*0.60 = 0.56
-                        #   kelly = (0.56 - 0.44) / 1.0 = 0.12
-                        #   half_kelly = 0.06  ->  6% of NAV per trade
+                        # 3. RiskAgent evaluation
                         bt_confidence = max(
                             view.fused_confidence,
                             self._confidence_floor,
                         )
 
                         price_map = {ticker: today_close}
+                        # Always use direction=1 for sizing (evaluate_with_account
+                        # rejects direction=-1 when no position exists).
+                        # We flip SL/TP manually for shorts below.
                         envelope = risk.evaluate_with_account(
-                            direction=1,  # BUY
+                            direction=1,
                             current_price=today_close,
                             returns=returns,
                             atr=atr,
@@ -904,6 +934,14 @@ class DecadeBacktester:
                             price_map=price_map,
                             symbol=ticker,
                         )
+
+                        # Flip SL/TP for short positions
+                        if direction < 0 and envelope.stop_loss_price > 0:
+                            entry = today_close
+                            sl_dist = entry - envelope.stop_loss_price
+                            tp_dist = envelope.take_profit_price - entry
+                            envelope.stop_loss_price = entry + sl_dist
+                            envelope.take_profit_price = entry - tp_dist
 
                         if envelope.verdict == RiskVerdict.REJECTED:
                             logger.debug(
@@ -914,43 +952,50 @@ class DecadeBacktester:
 
                         qty = envelope.suggested_quantity
                         if qty <= 0:
-                            logger.debug(
-                                "[%s] %s qty=%.4f too small (skipped)",
-                                date_str, ticker, qty,
-                            )
+                            continue
+
+                        # Apply drawdown protection scaling
+                        qty = qty * dd_scale
+                        # Shorts get half the position size (higher risk)
+                        if direction < 0:
+                            qty *= 0.50
+                        if qty <= 0:
                             continue
 
                         cost = qty * today_close
                         if not virtual_account.can_afford(cost):
-                            logger.debug(
-                                "[%s] %s can't afford %.2f (cash=%.2f)",
-                                date_str, ticker, cost,
-                                virtual_account.available_cash,
-                            )
                             continue
 
                         # 4. Open position
-                        virtual_account.record_trade(ticker, qty, today_close)
-                        active_trades[ticker] = {
+                        trade_qty = qty if direction > 0 else -qty
+                        virtual_account.record_trade(ticker, trade_qty, today_close)
+                        trade_record = {
                             "entry_price": today_close,
                             "sl": envelope.stop_loss_price,
                             "tp": envelope.take_profit_price,
                             "qty": qty,
+                            "direction": direction,
                             "isin": isin,
-                            "fused_score": view.fused_score,
+                            "fused_score": score,
                             "fused_confidence": view.fused_confidence,
                             "agent_scores": {
                                 s.source: s.confidence
                                 for s in view.signals
                             },
                         }
+                        if direction > 0:
+                            trade_record["max_price"] = today_close
+                        else:
+                            trade_record["min_price"] = today_close
+                        active_trades[ticker] = trade_record
 
+                        side = "LONG" if direction > 0 else "SHORT"
                         logger.info(
-                            "[%s] OPEN %s x%.1f @ %.2f | "
-                            "SL=%.2f TP=%.2f | score=%.2f conf=%.2f",
-                            date_str, ticker, qty, today_close,
+                            "[%s] OPEN %s %s x%.1f @ %.2f | "
+                            "SL=%.2f TP=%.2f | score=%.2f dd_scale=%.2f",
+                            date_str, side, ticker, qty, today_close,
                             envelope.stop_loss_price, envelope.take_profit_price,
-                            view.fused_score, view.fused_confidence,
+                            score, dd_scale,
                         )
 
                     except Exception as exc:
@@ -961,15 +1006,22 @@ class DecadeBacktester:
                         logger.debug("Full traceback:", exc_info=True)
 
             # =========================================================
-            # Phase 3: 日結淨值 — Daily NAV snapshot
+            # Phase 3: 日結淨值 — Daily NAV snapshot (LONG + SHORT)
             # =========================================================
             total_invested_value = 0.0
             for ticker, trade in active_trades.items():
                 px = self._feeder.get_current_price(ticker)
                 if px:
-                    total_invested_value += trade["qty"] * px
+                    d = trade.get("direction", 1)
+                    if d > 0:
+                        total_invested_value += trade["qty"] * px
+                    else:
+                        # Short P&L: profit when price falls
+                        total_invested_value += abs(trade["qty"]) * (2 * trade["entry_price"] - px)
 
             nav = virtual_account.available_cash + total_invested_value
+            if nav > peak_nav:
+                peak_nav = nav
             daily_nav.append({"date": current_dt, "nav": nav})
 
             # =========================================================
@@ -1327,8 +1379,8 @@ def _parse_args() -> argparse.Namespace:
         help="Minimum fused_score to open a trade (default: 0.03)",
     )
     parser.add_argument(
-        "--confidence-floor", type=float, default=0.75,
-        help="Confidence floor for Kelly formula in backtest (default: 0.75)",
+        "--confidence-floor", type=float, default=0.70,
+        help="Confidence floor for Kelly formula in backtest (default: 0.70)",
     )
     parser.add_argument(
         "--data-dir", default="data/backtest",

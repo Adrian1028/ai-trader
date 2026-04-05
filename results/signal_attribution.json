@@ -1,0 +1,32 @@
+{
+  "v0_no_macro": {
+    "sharpe": 0.8500753707051503,
+    "max_dd_pct": 21.17798938989225,
+    "total_return_pct": 45.53357724071836
+  },
+  "va_macro_only": {
+    "sharpe": 0.40563533307239336,
+    "max_dd_pct": 18.25542333806033,
+    "total_return_pct": 12.940194453328125
+  },
+  "vb_macro_insider": {
+    "sharpe": 0.40563533307239336,
+    "max_dd_pct": 18.25542333806033,
+    "total_return_pct": 12.940194453328125
+  },
+  "vc_full": {
+    "sharpe": 0.40563533307239336,
+    "max_dd_pct": 18.25542333806033,
+    "total_return_pct": 12.940194453328125
+  },
+  "attribution": {
+    "macro_delta_sharpe": -0.4444400376327569,
+    "insider_delta_sharpe": 0.0,
+    "risk_limits_delta_sharpe": 0.0
+  },
+  "recommendations": {
+    "macro": "REMOVE",
+    "insider": "REMOVE",
+    "risk_limits": "KEEP"
+  }
+}
