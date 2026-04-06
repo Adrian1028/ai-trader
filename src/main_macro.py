@@ -41,6 +41,7 @@ from src.resilience.failsafe import FailsafeManager, SystemMode
 from src.capital.allocation_tracker import AllocationTracker
 from src.capital.unified_risk import UnifiedRiskManager, RiskLimits
 from src.monitoring.exit_monitor import ExitMonitor
+from src.execution.trading212 import Trading212Executor, RebalanceResult
 
 logger = logging.getLogger("MacroTrader")
 
@@ -112,6 +113,9 @@ class MacroTrader:
 
         # Register capital
         self.capital.register_system("macro_spy", INITIAL_CAPITAL)
+
+        # Executor
+        self.executor = Trading212Executor()
 
         # State
         self.current_regime = "NORMAL"
@@ -247,7 +251,7 @@ class MacroTrader:
         logger.info("Step 6: Target allocation — SPY: %.0f%%, SHV: %.0f%%",
                      alloc["SPY"] * 100, alloc["SHV"] * 100)
 
-        # Step 7: Record trade decision (paper trading — no actual execution yet)
+        # Step 7: Track regime change
         prev_regime = self.current_regime
         if regime != prev_regime:
             action = {
@@ -263,33 +267,49 @@ class MacroTrader:
         else:
             logger.info("  No regime change (still %s)", regime)
 
-        # Step 8: Estimate NAV (paper trading uses close prices)
+        # Step 8: Execute trades via Trading 212 API
+        rebalance_result = None
+        if self.executor.enabled:
+            logger.info("Step 8: Executing rebalance via Trading 212...")
+            try:
+                rebalance_result = await self.executor.rebalance(alloc, regime)
+                result["execution"] = rebalance_result.to_dict()
+                logger.info("  Execution status: %s, trades: %d",
+                            rebalance_result.status, len(rebalance_result.trades))
+
+                # Use real NAV from T212
+                nav = rebalance_result.nav_after if rebalance_result.nav_after > 0 else rebalance_result.nav_before
+            except Exception as e:
+                logger.error("Execution failed: %s", e)
+                result["execution"] = {"status": "ERROR", "error": str(e)}
+                nav = self.capital.systems["macro_spy"].current_nav
+        else:
+            logger.info("Step 8: Executor disabled — paper trading mode")
+            nav = self.capital.systems["macro_spy"].current_nav
+
+        # Step 8b: Update NAV tracking
         try:
             spy_price = fetch_from_yfinance("SPY", today, today)
-            shv_price = fetch_from_yfinance("SHV", today, today)
             spy_close = float(spy_price.iloc[-1]) if not spy_price.empty else 0
-            shv_close = float(shv_price.iloc[-1]) if not shv_price.empty else 0
 
-            nav = self.capital.systems["macro_spy"].current_nav
+            # If executor gave us real NAV, use it; otherwise estimate
+            if self.executor.enabled and rebalance_result and rebalance_result.nav_after > 0:
+                nav = rebalance_result.nav_after
+
             spy_value = nav * alloc["SPY"]
             shv_value = nav * alloc["SHV"]
 
             result["nav"] = nav
             result["spy_close"] = spy_close
 
-            # Record for exit monitor
             self.exit_monitor.record_daily(today, nav, spy_close, regime)
-
-            # Record for risk manager
             self.risk.record_nav(nav)
-
-            # Update capital tracker
             self.capital.update_nav("macro_spy", nav, shv_value, spy_value)
 
         except Exception as e:
-            logger.warning("NAV estimation failed: %s", e)
+            logger.warning("NAV tracking failed: %s", e)
 
-        # Step 9: Send Discord notification
+        # Step 9: Send Discord notification (signal + execution)
         elapsed = time.monotonic() - cycle_start
         result["elapsed_seconds"] = elapsed
 
@@ -301,6 +321,12 @@ class MacroTrader:
         )
         if result["actions"]:
             msg += f"\nActions: {len(result['actions'])} regime change(s)"
+
+        # Append execution details
+        if rebalance_result:
+            msg += f"\n\n{rebalance_result.discord_summary()}"
+        elif not self.executor.enabled:
+            msg += "\n\n*Paper trading mode — no orders executed*"
 
         await self._notify(msg)
 
@@ -422,7 +448,8 @@ async def main():
         scheduler.shutdown(wait=True)
         logger.info("Shutdown complete.")
 
-    # Cleanup Discord session
+    # Cleanup sessions
+    await trader.executor.close()
     discord = await trader._get_discord()
     if discord:
         await discord.close()
